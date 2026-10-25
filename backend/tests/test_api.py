@@ -52,7 +52,7 @@ def test_registration_can_be_closed_but_existing_students_still_enter(client):
 
 def test_students_cannot_use_admin_things(client):
     s = login(client, "alumno@x.com")
-    for method, path in [("get", "/api/admin/dashboard"), ("get", "/api/admin/export"), ("get", "/api/admin/backup"),
+    for method, path in [("get", "/api/admin/dashboard"), ("get", "/api/admin/export"),
                          ("put", "/api/admin/settings"), ("post", "/api/admin/sentences"),
                          ("delete", "/api/admin/sentences/unannotated")]:
         r = getattr(client, method)(path, headers=s, **({"json": {}} if method in ("put", "post") else {}))
@@ -119,8 +119,6 @@ def test_full_flow_progress_and_export(con, client):
     assert len(jl) == 3
     csv_text = client.get("/api/admin/export?format=csv", headers=a).text
     assert "uno@x.com" in csv_text and "catalog_version" in csv_text
-    from app import db
-    assert client.get("/api/admin/backup", headers=a).status_code == (404 if db.using_postgres() else 200)
 
 
 def test_raising_n_tops_up_on_next_visit(client):
@@ -134,28 +132,6 @@ def test_raising_n_tops_up_on_next_visit(client):
     assert len(client.get("/api/my/queue", headers=s).json()["items"]) == 6
     assert client.put("/api/admin/settings", headers=a, json={"sentences_per_student": 0}).status_code == 422
 
-
-def test_migration_from_old_schema(tmp_path):
-    import sqlite3
-    from app import db
-    p = tmp_path / "old.db"
-    old = sqlite3.connect(p)
-    old.executescript("""
-      CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, token TEXT UNIQUE NOT NULL,
-        role TEXT NOT NULL DEFAULT 'annotator' CHECK (role IN ('annotator','reviewer','admin')), active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
-      CREATE TABLE assignments (id INTEGER PRIMARY KEY, sentence_id INTEGER, user_id INTEGER, seq INTEGER);
-      CREATE TABLE annotations (id INTEGER PRIMARY KEY, sentence_id INTEGER, user_id INTEGER);
-      CREATE TABLE choice_memory (lemma TEXT, picto_id INTEGER, user_id INTEGER, count INTEGER, last_used TEXT);
-      INSERT INTO users VALUES (1,'Tu nombre','t1','admin',1,'x'),(2,'prueba','t2','annotator',1,'x'),
-                               (3,'real@x.com','t3','reviewer',1,'x'),(4,'antigua','t4','annotator',1,'x');
-      INSERT INTO annotations VALUES (1,1,4);
-    """)
-    old.commit(); old.close()
-    db.init_db(p)
-    con = db.connect(p)
-    rows = {r["email"]: r["role"] for r in con.execute("SELECT email, role FROM users")}
-    # Las cuentas viejas sin correo y sin anotaciones ('Tu nombre', 'prueba') se borran; la que tiene anotaciones se conserva.
-    assert rows == {"real@x.com": "annotator", "antigua": "annotator"}
 
 
 def test_concurrent_new_students_get_balanced_sentences(client):

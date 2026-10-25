@@ -19,5 +19,3 @@ services:
         sync: false
       - key: SENTENCES_PER_STUDENT
         value: "15"
-      - key: BACKUP_INTERVAL_HOURS # las copias locales no sirven sin disco; Neon guarda su historial
-        value: "0"

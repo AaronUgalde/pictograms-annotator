@@ -43,6 +43,36 @@ def _verb_variants(t) -> list[str]:
     return out
 
 
+# Terminaciones verbales comunes (sin tildes, de más larga a más corta).
+_VERB_ENDINGS = sorted({
+    "aremos", "eremos", "iremos", "abamos", "iamos", "ieron", "aron", "aban", "ando", "iendo", "amos", "emos",
+    "imos", "aste", "iste", "aria", "eria", "iria", "aba", "ado", "ido", "ara", "era", "ira", "ian", "io", "ia",
+    "an", "en", "as", "es", "a", "e", "o", "i",
+}, key=len, reverse=True)
+
+
+def _conjugation_guesses(word: str) -> list[str]:
+    """Infinitivos posibles de una forma conjugada que el analizador no reconoció
+    («pintan» → pintar/pinter/pintir, «ayúdame» → ayudar…). Solo se aceptan si son verbos del catálogo."""
+    w = norm(word)
+    if len(w) < 4 or " " in w:
+        return []
+    forms = [w]
+    m = _ANY_CLITIC.match(w)
+    if m:
+        forms.append(m.group(1))
+    out: list[str] = []
+    for f in forms:
+        if f.endswith(("ar", "er", "ir")):
+            out.append(f)
+        for end in _VERB_ENDINGS:
+            if f.endswith(end) and len(f) - len(end) >= 2:
+                stem = f[: -len(end)]
+                out += [stem + "ar", stem + "er", stem + "ir"]
+    seen: set = set()
+    return [x for x in out if not (x in seen or seen.add(x))]
+
+
 def _lemma(t) -> str:
     """Lema con los pronombres enclíticos quitados: «lavarme» → «lavar», «ponérselo» → «poner»."""
     lemma = t.lemma
@@ -180,6 +210,13 @@ def analyze_sentence(con, text: str, user_id=None, team_memory: bool = False, bl
                     if cands:
                         found = (i, length, window, key, cands)
                         break
+                if not found and length == 1:
+                    # Último recurso: un verbo conjugado que el analizador no supo lematizar.
+                    for key in _conjugation_guesses(window[0].text):
+                        cands = [c for c in idx.lookup(key) if c["type"] == 3]
+                        if cands:
+                            found = (i, length, window, key, cands)
+                            break
                 if found:
                     break
             if found:

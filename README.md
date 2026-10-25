@@ -34,7 +34,7 @@ En la pantalla de entrada, abre **Soy administrador** y escribe la contraseña (
 - **Oraciones:** sube un archivo `.txt` (una oración por línea) o `.csv` (columna `oracion`). Puedes subir más archivos cuando quieras; las repetidas se ignoran. Hay ejemplos en `data/sentences/`.
 - **Ajustes:** cuántas oraciones recibe cada alumno (15 por defecto) y si se permiten cuentas nuevas.
 - **Alumnos:** tabla con el correo de cada alumno, cuántas oraciones tiene, cuántas hizo, cuántas le faltan, una barra de progreso y si ya terminó.
-- **Resultados:** descarga en CSV (se abre en Excel) o JSONL, y copia de seguridad de la base de datos.
+- **Resultados:** descarga en CSV (se abre en Excel) o JSONL.
 
 Los alumnos no pueden entrar al panel: todas las rutas de administración exigen la sesión de administrador, que solo se obtiene con la contraseña.
 
@@ -52,35 +52,32 @@ Así, con pocos alumnos se cubren todas las oraciones al menos una vez, y con m�
 
 La propuesta inicial sale de un diccionario (el catálogo de ARASAAC) y de un analizador del español (spaCy, para pasar «comimos» a «comer»), más lo que ese mismo alumno eligió antes para esa palabra. No se usa ningún modelo generativo. Cada respuesta guarda si el alumno aceptó la propuesta sin cambios y cuánto tardó, por si se quiere analizar después.
 
-## Publicar la aplicación (deploy)
+## Publicar la aplicación (deploy): Render + Neon, gratis
 
-La aplicación es **un solo contenedor Docker** (API + interfaz). Los datos (alumnos, oraciones y respuestas) se guardan en:
+La aplicación es **un solo contenedor Docker** (API + interfaz) y guarda los datos (alumnos, oraciones y respuestas) en **PostgreSQL**. Se publica gratis así:
 
-- **PostgreSQL**, si defines la variable `DATABASE_URL`. Es lo que permite usar servidores gratuitos sin disco, como Render + Neon.
-- **SQLite** (archivo `/data/annotator.db`) en cualquier otro caso. Para eso hace falta un disco persistente montado en `/data`.
+- **Neon** guarda la base de datos.
+- **Render** ejecuta la aplicación. Su plan gratuito no tiene disco, y no hace falta: el catálogo de pictogramas viaja dentro de la imagen y se carga en memoria al arrancar.
 
-El catálogo de pictogramas viaja dentro de la imagen y se reconstruye solo en cada arranque (tarda un segundo), así que no necesita guardarse en ningún lado. Usa una sola instancia del servicio. Necesita unos 300 MB de RAM.
+Usa unos 200 MB de RAM, holgado para los 512 MB del plan gratuito de Render.
 
-Variables disponibles (ver `.env.example`):
+Variables (ver `.env.example`):
 
 | Variable | Para qué | Valor por defecto |
 |---|---|---|
+| `DATABASE_URL` | Cadena de conexión de PostgreSQL (Neon) | — (obligatoria) |
 | `ADMIN_PASSWORD` | Contraseña del panel | — (obligatoria) |
-| `DATABASE_URL` | Base PostgreSQL (Neon). Sin ella se usa SQLite | vacío |
 | `ALLOWED_EMAIL_DOMAINS` | Solo esos dominios pueden crear cuenta, p. ej. `alumnos.uni.mx` | vacío = cualquier correo |
 | `SENTENCES_PER_STUDENT` | Valor inicial de oraciones por alumno | `15` |
-| `BACKUP_INTERVAL_HOURS` | Copia automática de la base SQLite en `/data/backups` (no se usa con PostgreSQL) | `6` |
 
-### Opción A (gratis): Render + Neon
+### 1. Base de datos en Neon
 
-**1. Base de datos en Neon**
-
-1. Crea una cuenta en [neon.com](https://neon.com) (no pide tarjeta) y un proyecto nuevo, con la región más cercana, por ejemplo *AWS US East (Ohio)*.
+1. Crea una cuenta en [neon.com](https://neon.com) (no pide tarjeta) y un proyecto nuevo, con la región *AWS US East (Ohio)*, que queda cerca de Render.
 2. En el panel del proyecto pulsa **Connect** y copia la *connection string*. Se ve así: `postgresql://usuario:clave@ep-xxxx.us-east-2.aws.neon.tech/neondb?sslmode=require`.
 
 La aplicación crea sus tablas sola al arrancar. El plan gratuito da 0.5 GB, de sobra para miles de respuestas.
 
-**2. Aplicación en Render**
+### 2. Aplicación en Render
 
 1. Sube este repositorio a GitHub.
 2. En [render.com](https://render.com): **New → Blueprint** y elige el repositorio. Render lee `render.yaml` y te pide:
@@ -89,30 +86,14 @@ La aplicación crea sus tablas sola al arrancar. El plan gratuito da 0.5 GB, de 
    - `ALLOWED_EMAIL_DOMAINS`: opcional, puedes dejarla vacía.
 3. Espera a que termine la construcción (10–15 minutos la primera vez) y comparte la URL `https://….onrender.com`.
 
-**Limitaciones del plan gratuito:**
+### Cómo se comporta el plan gratuito
 
-- El servicio **se duerme tras 15 minutos sin visitas**. La siguiente visita tarda alrededor de un minuto en cargar; después funciona normal. Avisa a los alumnos, o abre tú la página unos minutos antes de la clase.
+- El servicio **se duerme tras 15 minutos sin visitas**. La siguiente visita tarda alrededor de un minuto en cargar; después funciona normal. Abre tú la página unos minutos antes de la clase.
 - La base de Neon también se duerme sola y despierta en unos segundos con la primera consulta.
 - Los pictogramas se vuelven a descargar de ARASAAC después de cada reinicio. Es automático; solo la primera carga es algo más lenta.
-- No hay copia `.db`: el respaldo es **descargar el CSV o el JSONL** desde el panel. Neon guarda además un historial corto que permite restaurar.
-
-Para actualizar la aplicación basta con hacer `git push`: Render vuelve a desplegar solo, y los datos siguen en Neon.
-
-### Opción B (gratis): servidor propio (Oracle Cloud Always Free o cualquier VPS)
-
-Siempre encendido y sin base externa, pero hay que administrar la máquina. Con Docker instalado:
-
-```bash
-cp .env.example .env     # pon ADMIN_PASSWORD y DOMAIN (sin dominio: TU-IP-con-guiones.sslip.io)
-docker compose -f docker-compose.vps.yml up -d --build
-```
-
-Caddy obtiene el certificado HTTPS automáticamente. Los datos quedan en la carpeta `./datos`: respáldala. Abre los puertos 80 y 443 en el firewall del proveedor (en Oracle, también en el `iptables` de la máquina).
-
-### Otras
-
-- `docker-compose.yml`: lo mismo que la opción B pero sin HTTPS, en el puerto 8000. Útil en una red local.
-- `fly.toml`: Fly.io con un volumen en `/data` (de pago).
+- El respaldo es **descargar el CSV o el JSONL** desde el panel. Neon guarda además un historial corto que permite restaurar.
+- Para actualizar la aplicación basta con hacer `git push`: Render vuelve a desplegar solo, y los datos siguen en Neon.
+- Para **borrar todos los datos**, abre el *SQL Editor* de Neon y ejecuta `DROP TABLE annotation_items, annotations, assignments, choice_memory, settings, sentences, users CASCADE;`. Después reinicia el servicio en Render (*Manual Deploy → Restart service*), que vuelve a crear las tablas vacías.
 
 ### Después de publicar
 
@@ -124,20 +105,35 @@ Caddy obtiene el certificado HTTPS automáticamente. Los datos quedan en la carp
 
 ## Desarrollo local
 
-Requiere Python 3.12 (con 3.14 spaCy falla al cargar el modelo).
+Requiere Python 3.12 (con 3.14 spaCy falla al cargar el modelo) y una base PostgreSQL. Puede ser un segundo proyecto o *branch* de Neon, o un PostgreSQL local:
+
+```bash
+brew install postgresql@17 && brew services start postgresql@17
+/opt/homebrew/opt/postgresql@17/bin/createdb annotator
+```
+
+Instalación y arranque:
 
 ```bash
 cd backend
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pip install "es_core_news_md @ https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.8.0/es_core_news_md-3.8.0-py3-none-any.whl"
+pip install "es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl"
 
-ADMIN_PASSWORD=prueba python manage.py serve      # http://localhost:8000
-python -m pytest                                    # pruebas (no necesitan red ni spaCy)
-TEST_DATABASE_URL=postgresql://... python -m pytest # las mismas pruebas contra PostgreSQL
+export DATABASE_URL=postgresql://localhost/annotator ADMIN_PASSWORD=prueba
+python manage.py serve                               # http://localhost:8000
 ```
 
-También puedes poner las variables en un archivo `.env` en la raíz del proyecto. `manage.py` tiene órdenes opcionales (`sentences import`, `export`, `backup`, `prefetch-images`), pero todo lo habitual se hace desde el panel.
+También puedes poner las variables en un archivo `.env` en la raíz del proyecto.
+
+Pruebas: usan una base aparte que **se borra en cada prueba**; nunca uses la de producción.
+
+```bash
+/opt/homebrew/opt/postgresql@17/bin/createdb annotator_test
+TEST_DATABASE_URL=postgresql://localhost/annotator_test python -m pytest
+```
+
+`manage.py` tiene órdenes opcionales: `sentences import`, `export`, `reset` (borra todos los datos), `catalog status` y `prefetch-images`. Todo lo habitual se hace desde el panel.
 
 ## Estructura
 
@@ -147,14 +143,14 @@ backend/app/
   assign.py    carga de oraciones y reparto automático
   stats.py     datos del panel (progreso por alumno)
   suggest.py   propuestas de pictogramas (catálogo + spaCy + memoria del alumno)
-  catalog.py   catálogo ARASAAC en un SQLite local de solo lectura
+  catalog.py   catálogo ARASAAC, cargado en memoria desde data/catalog/
   export.py    CSV y JSONL
-  db.py        base de datos: PostgreSQL (DATABASE_URL) o SQLite, mismo código
+  db.py        base de datos PostgreSQL
 frontend/      interfaz (HTML, CSS y JavaScript sin dependencias ni compilación)
 data/catalog/  copia versionada del catálogo ARASAAC
 data/sentences/ ejemplos de archivos de oraciones
 docs/criterios-anotacion.md  guía de criterios que ven los alumnos
-Dockerfile, docker-compose.yml, render.yaml, fly.toml  despliegue
+Dockerfile, render.yaml  despliegue
 ```
 
 `PLAN.md` es el plan original del proyecto (pensado para un equipo con revisores); la aplicación actual es la versión simplificada descrita aquí.

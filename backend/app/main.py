@@ -19,15 +19,14 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assign, backup, catalog, config, db, export, items as items_mod, nlp, stats, suggest
+from . import assign, catalog, config, db, export, guide, items as items_mod, nlp, stats, suggest
 
 
 # ------------------------------------------------------------------ ciclo de vida
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"[inicio] base de datos: {db.kind()}")
-    await asyncio.to_thread(db.init_db)
+    await asyncio.to_thread(db.init_db)  # falla con un mensaje claro si no hay DATABASE_URL
     config.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(catalog.ensure_loaded)
     if not config.ADMIN_PASSWORD:
@@ -35,17 +34,8 @@ async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=20, follow_redirects=True)
     # spaCy tarda en cargar; se hace en segundo plano para que el servidor responda cuanto antes.
     warm = asyncio.create_task(asyncio.to_thread(nlp.backend))
-    task = None
-    # Copias automáticas solo con SQLite: con PostgreSQL (Neon) el proveedor guarda su propio historial.
-    if config.BACKUP_INTERVAL_HOURS > 0 and not db.using_postgres():
-        async def loop():
-            while True:
-                await asyncio.sleep(config.BACKUP_INTERVAL_HOURS * 3600)
-                await asyncio.to_thread(backup.run_backup)
-        task = asyncio.create_task(loop())
+    print("[inicio] listo")
     yield
-    if task:
-        task.cancel()
     warm.cancel()
     await app.state.http.aclose()
     db.close_pool()
@@ -57,7 +47,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "database": db.kind()}
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ identificación
@@ -194,7 +184,7 @@ def _items(con, items: list[ItemIn]):
 def me(user=Depends(current_user), con=Depends(db.get_db)):
     if user["role"] == "annotator":
         assign.ensure_assignments(con, user["id"])  # completa si el admin subió más oraciones o subió el número
-    return {"id": user["id"], "email": user["email"], "role": user["role"], "guide_version": backup.guide_version()}
+    return {"id": user["id"], "email": user["email"], "role": user["role"], "guide_version": guide.guide_version()}
 
 
 @app.get("/api/catalog")
@@ -209,7 +199,7 @@ def get_catalog(request: Request, user=Depends(current_user)):
 
 @app.get("/api/guide")
 def get_guide(user=Depends(current_user)):
-    return {"version": backup.guide_version(), "markdown": backup.guide_text()}
+    return {"version": guide.guide_version(), "markdown": guide.guide_text()}
 
 
 @app.get("/img/{pid}.png")
@@ -335,12 +325,12 @@ def put_annotation(sid: int, body: AnnotationIn, user=Depends(current_user), con
             " seconds, catalog_version, guide_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
             " RETURNING id",
             (sid, uid, body.status, body.note[:500], json.dumps(proposal), from_suggestion, unchanged,
-             seconds, version, backup.guide_version(), ts, ts)).fetchone()["id"]
+             seconds, version, guide.guide_version(), ts, ts)).fetchone()["id"]
     else:
         con.execute(
             "UPDATE annotations SET status=?, note=?, from_suggestion=?, accepted_unchanged=?, seconds=?,"
             " catalog_version=?, guide_version=?, updated_at=? WHERE id=?",
-            (body.status, body.note[:500], from_suggestion, unchanged, seconds, version, backup.guide_version(), ts, aid))
+            (body.status, body.note[:500], from_suggestion, unchanged, seconds, version, guide.guide_version(), ts, aid))
     for pos, it in enumerate(its):
         con.execute("INSERT INTO annotation_items(annotation_id, position, picto_id, keyword, token) VALUES (?,?,?,?,?)",
                     (aid, pos, it["picto_id"], it["keyword"], it["token"]))
@@ -384,14 +374,6 @@ def admin_export(format: Literal["jsonl", "csv"] = "jsonl", user=Depends(require
                                  headers={"Content-Disposition": 'attachment; filename="pictogramas.csv"'})
     return PlainTextResponse(export.to_jsonl(con), media_type="application/x-ndjson; charset=utf-8",
                              headers={"Content-Disposition": 'attachment; filename="pictogramas.jsonl"'})
-
-
-@app.get("/api/admin/backup")
-def admin_backup(user=Depends(require_admin)):
-    if db.using_postgres():
-        raise HTTPException(404, "Con PostgreSQL la copia se hace descargando el CSV o el JSONL")
-    path = backup.run_backup()
-    return FileResponse(path, media_type="application/octet-stream", filename="annotator-backup.db")
 
 
 # ------------------------------------------------------------------ frontend (debe ir al final)

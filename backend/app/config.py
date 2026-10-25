@@ -26,17 +26,12 @@ def _path(env: str, default: Path) -> Path:
 
 
 DATA_DIR = _path("ANNOTATOR_DATA_DIR", ROOT / "data")
-DB_PATH = _path("ANNOTATOR_DB", DATA_DIR / "annotator.db")
-# Si se define (postgresql://… de Neon, por ejemplo), los datos de la aplicación van a PostgreSQL
-# en lugar del archivo SQLite. Es lo necesario en servidores sin disco persistente (Render gratis).
+# OBLIGATORIA: base de datos PostgreSQL (Neon), p. ej. postgresql://usuario:clave@servidor/neondb?sslmode=require
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-# El catálogo de pictogramas siempre es un SQLite local de solo lectura (se reconstruye solo).
-CATALOG_DB = _path("ANNOTATOR_CATALOG_DB", DATA_DIR / "catalog.db")
 CATALOG_DIR = DATA_DIR / "catalog"
 # Copia del catálogo que viaja con el código; se usa para arrancar sin depender de internet.
 CATALOG_SEED_DIR = _path("ANNOTATOR_CATALOG_SEED", ROOT / "data" / "catalog")
-IMAGES_DIR = DATA_DIR / "images"
-BACKUP_DIR = DATA_DIR / "backups"
+IMAGES_DIR = DATA_DIR / "images"          # caché de imágenes de ARASAAC (se puede perder sin problema)
 FRONTEND_DIR = ROOT / "frontend"
 DOCS_DIR = ROOT / "docs"
 GUIDE_PATH = DOCS_DIR / "criterios-anotacion.md"
@@ -54,9 +49,8 @@ ALLOWED_EMAIL_DOMAINS = [
 # Valor inicial de «oraciones por alumno»; después lo cambia el admin desde el panel.
 DEFAULT_SENTENCES_PER_STUDENT = int(os.environ.get("SENTENCES_PER_STUDENT", "15"))
 
-BACKUP_INTERVAL_HOURS = float(os.environ.get("BACKUP_INTERVAL_HOURS", "6"))
-BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "30"))
-
-SPACY_MODEL = os.environ.get("SPACY_MODEL", "es_core_news_md")
+# Modelo pequeño: ~75 MB de RAM frente a ~285 MB del mediano, con las mismas sugerencias en la práctica
+# (cabe holgado en los 512 MB de Render gratis).
+SPACY_MODEL = os.environ.get("SPACY_MODEL", "es_core_news_sm")
 # "auto" usa spaCy si está disponible; "simple" fuerza el analizador de respaldo (tests).
 NLP_BACKEND = os.environ.get("ANNOTATOR_NLP", "auto")

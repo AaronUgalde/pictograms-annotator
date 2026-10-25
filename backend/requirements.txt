@@ -2,7 +2,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
-# PostgreSQL (Neon). Solo se usa si está definida DATABASE_URL.
+# PostgreSQL (Neon), la base de datos de la aplicación.
 psycopg[binary]>=3.2
 psycopg-pool>=3.2
 # spaCy: versiones fijadas porque spacy 3.8.16 + preshed/murmurhash recientes
@@ -14,4 +14,4 @@ cymem==2.0.11
 murmurhash==1.0.12
 thinc==8.3.6
 # Modelo (instalar aparte):
-#   uv pip install "es_core_news_md @ https://github.com/explosion/spacy-models/releases/download/es_core_news_md-3.8.0/es_core_news_md-3.8.0-py3-none-any.whl"
+#   uv pip install "es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl"

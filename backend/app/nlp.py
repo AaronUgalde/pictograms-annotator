@@ -1,4 +1,4 @@
-"""Análisis lingüístico: spaCy (es_core_news_md) con un analizador de respaldo sin dependencias."""
+"""Análisis lingüístico: spaCy (es_core_news_sm) con un analizador de respaldo sin dependencias."""
 import re
 from dataclasses import dataclass
 

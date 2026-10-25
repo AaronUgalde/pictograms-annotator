@@ -4,15 +4,14 @@ import tempfile
 _tmp = tempfile.mkdtemp(prefix="annotator-test-")
 os.environ["ANNOTATOR_DATA_DIR"] = _tmp
 os.environ["ANNOTATOR_NLP"] = "simple"
-os.environ["BACKUP_INTERVAL_HOURS"] = "0"
 os.environ["ADMIN_PASSWORD"] = "clave-de-prueba"
-os.environ["ANNOTATOR_DB"] = os.path.join(_tmp, "annotator.db")
-# Para probar contra PostgreSQL:  TEST_DATABASE_URL=postgresql://… python -m pytest
+# Las pruebas usan una base PostgreSQL desechable (SE BORRA en cada prueba). Nunca la de producción:
+#   TEST_DATABASE_URL=postgresql://postgres@localhost:5432/annotator_test python -m pytest
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "")
 
 import pytest  # noqa: E402
 
-from app import catalog, config, db  # noqa: E402
+from app import catalog, db  # noqa: E402
 
 
 def P(pid, kws, tags=(), **kw):
@@ -39,15 +38,16 @@ def fake_catalog():
     catalog.ingest(FAKE, "test-v1")
 
 
+def pytest_configure(config):
+    if not os.environ["DATABASE_URL"]:
+        pytest.exit("Define TEST_DATABASE_URL con una base PostgreSQL de prueba (se borra en cada prueba).", returncode=2)
+
+
 @pytest.fixture()
 def con():
-    if db.using_postgres():
-        c = db.connect()
-        db.drop_all(c)
-        c.close()
-    else:
-        for f in config.DB_PATH.parent.glob("annotator.db*"):
-            f.unlink()
+    c = db.connect()
+    db.drop_all(c)
+    c.close()
     db.init_db()
     c = db.connect()
     yield c

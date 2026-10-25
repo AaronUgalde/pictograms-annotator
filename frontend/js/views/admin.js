@@ -103,18 +103,15 @@ export async function adminView(root, ctx) {
   }
 
   // ---- descargas
-  function dataBox(settings) {
+  function dataBox() {
     const dl = (fmt) => async () => {
       try { downloadBlob(`pictogramas.${fmt}`, await (await api(`/api/admin/export?format=${fmt}`, { raw: true })).blob()); } catch (e) { toast(e.message, 'error'); }
     };
     return section('Resultados',
       h('div', { class: 'row' },
         h('button', { class: 'mc-btn', type: 'button', onClick: dl('csv') }, 'Descargar CSV (Excel)'),
-        h('button', { class: 'mc-btn', type: 'button', onClick: dl('jsonl') }, 'Descargar JSONL'),
-        settings.database === 'sqlite' ? h('button', { class: 'mc-btn', type: 'button', onClick: async () => {
-          try { downloadBlob('annotator-backup.db', await (await api('/api/admin/backup', { raw: true })).blob()); } catch (e) { toast(e.message, 'error'); }
-        } }, 'Copia de seguridad (.db)') : null),
-      h('p', { class: 'hint' }, 'Cada fila es la respuesta de un alumno a una oración. Descarga una copia de vez en cuando, sobre todo antes de cambiar el servidor.'));
+        h('button', { class: 'mc-btn', type: 'button', onClick: dl('jsonl') }, 'Descargar JSONL')),
+      h('p', { class: 'hint' }, 'Cada fila es la respuesta de un alumno a una oración. Descarga el CSV de vez en cuando como copia de seguridad.'));
   }
 
   async function load() {
@@ -125,7 +122,7 @@ export async function adminView(root, ctx) {
         cards([['Alumnos', t.students], ['Ya terminaron', `${t.students_finished} de ${t.students}`], ['Oraciones cargadas', t.sentences], ['Respuestas guardadas', t.annotations]]),
         h('p', { class: 'muted', style: { marginTop: '10px' } },
           `Oraciones con ninguna respuesta: ${c['0']} · con una: ${c['1']} · con dos o más: ${c['2+']}`)),
-      sentencesBox(t.sentences), settingsBox(d.settings), studentsBox(d.students), dataBox(d.settings));
+      sentencesBox(t.sentences), settingsBox(d.settings), studentsBox(d.students), dataBox());
   }
 
   await load();

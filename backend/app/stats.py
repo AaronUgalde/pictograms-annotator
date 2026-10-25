@@ -41,5 +41,4 @@ def settings(con) -> dict:
         "sentences_per_student": assign.per_student(con),
         "registration_open": db.get_setting(con, "registration_open", "1") == "1",
         "allowed_domains": config.ALLOWED_EMAIL_DOMAINS,
-        "database": db.kind(),
     }

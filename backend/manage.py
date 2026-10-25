@@ -4,7 +4,7 @@
 Ejemplos (desde la carpeta backend/):
     python manage.py sentences import ../data/sentences/ejemplo.txt
     python manage.py export --format csv --out resultados.csv
-    python manage.py backup
+    python manage.py reset
     python manage.py prefetch-images
     python manage.py serve --host 0.0.0.0
 """
@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 
 from app import assign as assign_mod
-from app import backup, catalog, config, db, export
+from app import catalog, config, db, export
 
 
 def _con():
@@ -28,7 +28,22 @@ def _con():
 
 def cmd_init(args):
     db.init_db()
-    print("Base de datos lista:", "PostgreSQL (DATABASE_URL)" if db.using_postgres() else config.DB_PATH)
+    print("Tablas listas en la base de DATABASE_URL.")
+
+
+def cmd_reset(args):
+    """Borra TODOS los datos (alumnos, oraciones, respuestas y ajustes) y deja las tablas vacías."""
+    if not args.yes:
+        answer = input("Se borrarán todos los alumnos, oraciones y respuestas. Escribe BORRAR para confirmar: ")
+        if answer.strip() != "BORRAR":
+            sys.exit("Cancelado.")
+    con = db.connect()
+    try:
+        db.drop_all(con)
+    finally:
+        con.close()
+    db.init_db()
+    print("Base de datos vacía y lista.")
 
 
 def cmd_catalog(args):
@@ -43,6 +58,7 @@ def cmd_catalog(args):
         n = catalog.ingest(raw, version)
         print(f"{n} pictogramas cargados desde {args.path}. Versión: {version}")
     else:
+        catalog.ensure_loaded()
         print(catalog.status())
 
 
@@ -66,10 +82,6 @@ def cmd_sentences(args):
         print(res)
     finally:
         con.close()
-
-
-def cmd_backup(args):
-    print("Copia creada:", backup.run_backup())
 
 
 def cmd_export(args):
@@ -141,7 +153,9 @@ def main():
     s.add_argument("file")
     s.set_defaults(fn=cmd_sentences)
 
-    sub.add_parser("backup").set_defaults(fn=cmd_backup)
+    r = sub.add_parser("reset", help="borra todos los datos")
+    r.add_argument("--yes", action="store_true", help="no pedir confirmación")
+    r.set_defaults(fn=cmd_reset)
 
     e = sub.add_parser("export")
     e.add_argument("--format", choices=["jsonl", "csv"], default="jsonl")
