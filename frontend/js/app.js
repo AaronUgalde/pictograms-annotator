@@ -40,11 +40,12 @@ function renderChrome() {
   nav.replaceChildren(
     ...(isAdmin ? [mk('Panel', '#/admin')] : [mk('Anotar', '#/'), mk('Mis oraciones', '#/queue')]),
     h('button', { class: 'mc-btn small', type: 'button', onClick: openGuide }, 'Guía'));
-  document.getElementById('userbox').replaceChildren(
+  document.getElementById('userbox').replaceChildren(...[
     isAdmin ? null : h('span', { id: 'progress', class: 'progress', 'aria-live': 'polite' }),
     h('span', { class: 'muted' }, isAdmin ? 'Administración' : ctx.me.email),
     h('button', { class: 'mc-btn small', type: 'button', 'aria-label': 'Cambiar tema claro u oscuro', onClick: toggleTheme }, '◐'),
-    h('button', { class: 'mc-btn small', type: 'button', onClick: () => { auth.clear(); location.hash = ''; location.reload(); } }, 'Salir'));
+    h('button', { class: 'mc-btn small', type: 'button', onClick: () => { auth.clear(); location.hash = ''; location.reload(); } }, 'Salir'),
+  ].filter(Boolean));
 }
 
 /** «Te faltan 12 de 15» con barra, siempre visible para el alumno. */
