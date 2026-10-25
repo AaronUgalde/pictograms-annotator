@@ -5,3 +5,4 @@ data/annotator.db*
 data/images/
 data/backups/
 .DS_Store
+.env

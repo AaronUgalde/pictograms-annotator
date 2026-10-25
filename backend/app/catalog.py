@@ -143,6 +143,30 @@ def status(con) -> dict:
     }
 
 
+def ensure_loaded(con) -> str:
+    """Deja el catálogo listo al arrancar (primer despliegue incluido).
+
+    Si la base no tiene catálogo, carga la copia más reciente que viaja con el código (o la que haya en
+    el volumen de datos) y, solo si no existe ninguna, la descarga de ARASAAC. El catálogo queda
+    congelado: todos los alumnos anotan con los mismos IDs.
+    """
+    version = db.get_setting(con, "catalog_version")
+    if version and con.execute("SELECT 1 FROM catalog LIMIT 1").fetchone():
+        return version
+    snapshots = sorted(
+        [*config.CATALOG_SEED_DIR.glob("arasaac-*.json.gz"), *config.CATALOG_DIR.glob("arasaac-*.json.gz")],
+        key=lambda p: p.name,
+    )
+    if snapshots:
+        version, raw = load_snapshot(snapshots[-1])
+    else:
+        version, raw, _ = download()
+    ingest(con, raw, version, force=True)
+    db.set_setting(con, "catalog_frozen", "1")
+    con.commit()
+    return version
+
+
 # ---------------------------------------------------------------- índice en memoria
 
 class Index:

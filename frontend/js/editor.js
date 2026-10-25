@@ -29,7 +29,7 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
   let sugMap = new Map(); // id → {segment, key, keyword} de la lista de sugeridos que se está viendo
 
   // ------------------------------------------------------------ DOM
-  const tokensEl = h('div', { class: 'tokens', 'aria-label': 'Palabras de la frase' });
+  const tokensEl = h('div', { class: 'tokens', 'aria-label': 'Palabras de la oración' });
   const tabsEl = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Pestañas del catálogo' });
   const searchInput = h('input', {
     type: 'search', placeholder: 'Buscar nombre o nº…  ( / )', autocomplete: 'off', spellcheck: false,
@@ -90,7 +90,7 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
     }
     return {
       items: out, notes, map,
-      text: segs.length === 1 && f != null ? `Alternativas para «${segs[0].text}»` : 'Sugerencias para toda la frase',
+      text: segs.length === 1 && f != null ? `Alternativas para «${segs[0].text}»` : 'Sugerencias para toda la oración',
       empty: 'No hay sugerencias. Usa el buscador o las categorías.',
     };
   }
@@ -110,7 +110,7 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
       out.push(p);
       notes.set(id, `Elegido ${m.count} ${m.count === 1 ? 'vez' : 'veces'} para «${m.key}»`);
     }
-    return { items: out, notes, text: 'Lo que elegiste antes para las palabras de esta frase', empty: 'Todavía no has elegido pictogramas para las palabras de esta frase.' };
+    return { items: out, notes, text: 'Lo que elegiste antes para las palabras de esta oración', empty: 'Todavía no has elegido pictogramas para las palabras de esta oración.' };
   }
 
   const recList = () => ({

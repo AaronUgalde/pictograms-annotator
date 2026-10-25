@@ -1,6 +1,14 @@
-"""API FastAPI + servidor del frontend."""
+"""API FastAPI + servidor del frontend.
+
+Alumnos: entran solo con su correo (si no existe, se crea la cuenta y se les asignan oraciones).
+Administración: contraseña (variable ADMIN_PASSWORD). Un alumno nunca recibe un token de administrador.
+"""
 import asyncio
+import hashlib
 import json
+import re
+import secrets
+import time
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -11,10 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assign as assign_mod
-from . import backup, catalog, config, db, export, review, suggest
-
-RANK = {"annotator": 1, "reviewer": 2, "admin": 3}
+from . import assign, backup, catalog, config, db, export, items as items_mod, stats, suggest
 
 
 # ------------------------------------------------------------------ ciclo de vida
@@ -23,6 +28,17 @@ RANK = {"annotator": 1, "reviewer": 2, "admin": 3}
 async def lifespan(app: FastAPI):
     db.init_db()
     config.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    def prepare():
+        con = db.connect()
+        try:
+            catalog.ensure_loaded(con)
+        finally:
+            con.close()
+
+    await asyncio.to_thread(prepare)
+    if not config.ADMIN_PASSWORD:
+        print("[aviso] ADMIN_PASSWORD no está definida: nadie podrá entrar al panel de administración.")
     app.state.http = httpx.AsyncClient(timeout=20, follow_redirects=True)
     task = None
     if config.BACKUP_INTERVAL_HOURS > 0:
@@ -37,26 +53,110 @@ async def lifespan(app: FastAPI):
     await app.state.http.aclose()
 
 
-app = FastAPI(title="Pictograms Annotator", lifespan=lifespan)
+app = FastAPI(title="Anotador de pictogramas", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-# ------------------------------------------------------------------ autenticación
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ identificación
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_email(raw: str) -> str:
+    email = (raw or "").strip().lower()
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        raise HTTPException(422, "Escribe un correo válido, por ejemplo nombre@correo.com")
+    domains = config.ALLOWED_EMAIL_DOMAINS
+    if domains and email.rsplit("@", 1)[1] not in domains:
+        raise HTTPException(403, "Usa tu correo institucional (@" + ", @".join(domains) + ")")
+    return email
+
 
 def current_user(request: Request, con=Depends(db.get_db)):
-    token = request.headers.get("x-token") or request.query_params.get("t")
-    row = con.execute("SELECT * FROM users WHERE token=? AND active=1", (token or "",)).fetchone() if token else None
+    token = request.headers.get("x-token")
+    row = con.execute("SELECT * FROM users WHERE token=? AND active=1", (token,)).fetchone() if token else None
     if not row:
         raise HTTPException(401, "Identificación no válida")
     return row
 
 
-def require(role: str):
-    def dep(user=Depends(current_user)):
-        if RANK[user["role"]] < RANK[role]:
-            raise HTTPException(403, "No tienes permiso para esto")
-        return user
-    return dep
+def require_admin(user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Solo la persona que administra puede hacer esto")
+    return user
+
+
+class LoginIn(BaseModel):
+    email: str
+
+
+class AdminLoginIn(BaseModel):
+    password: str
+
+
+@app.post("/api/login")
+def login(body: LoginIn, con=Depends(db.get_db)):
+    """Entrar o crear la cuenta con solo el correo. El correo identifica a la persona; no hay contraseña."""
+    email = normalize_email(body.email)
+    row = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    created = False
+    if row is None:
+        if db.get_setting(con, "registration_open", "1") != "1":
+            raise HTTPException(403, "El registro de cuentas nuevas está cerrado. Pide a tu docente que lo abra.")
+        cur = con.execute("INSERT INTO users(email, token, role, created_at) VALUES (?,?,?,?)",
+                          (email, db.new_token(), "annotator", db.now()))
+        con.commit()
+        row = con.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        created = True
+    elif not row["active"] or row["role"] != "annotator":
+        raise HTTPException(403, "Esta cuenta está desactivada.")
+    assign.ensure_assignments(con, row["id"])
+    return {"token": row["token"], "email": email, "created": created}
+
+
+_failures: dict[str, list[float]] = {}
+
+
+def _throttle(ip: str) -> None:
+    now = time.time()
+    recent = [t for t in _failures.get(ip, []) if now - t < 600]
+    _failures[ip] = recent
+    if len(recent) >= 5:
+        raise HTTPException(429, "Demasiados intentos. Espera unos minutos.")
+
+
+@app.post("/api/admin/login")
+def admin_login(body: AdminLoginIn, request: Request, con=Depends(db.get_db)):
+    if not config.ADMIN_PASSWORD:
+        raise HTTPException(503, "El servidor no tiene configurada ADMIN_PASSWORD.")
+    ip = request.client.host if request.client else "?"
+    _throttle(ip)
+    if not secrets.compare_digest(body.password.encode(), config.ADMIN_PASSWORD.encode()):
+        _failures.setdefault(ip, []).append(time.time())
+        raise HTTPException(401, "Contraseña incorrecta")
+    return {"token": ensure_admin(con)}
+
+
+def ensure_admin(con) -> str:
+    """Cuenta única de administración. Si cambia ADMIN_PASSWORD, el token anterior deja de valer."""
+    fp = hashlib.sha256(config.ADMIN_PASSWORD.encode()).hexdigest()[:16]
+    row = con.execute("SELECT * FROM users WHERE email='admin'").fetchone()
+    if row is None:
+        token = db.new_token()
+        con.execute("INSERT INTO users(email, token, role, created_at) VALUES ('admin', ?, 'admin', ?)", (token, db.now()))
+    elif db.get_setting(con, "admin_pw_fp") != fp or row["role"] != "admin" or not row["active"]:
+        token = db.new_token()
+        con.execute("UPDATE users SET token=?, role='admin', active=1 WHERE email='admin'", (token,))
+    else:
+        token = row["token"]
+    db.set_setting(con, "admin_pw_fp", fp)
+    con.commit()
+    return token
 
 
 # ------------------------------------------------------------------ modelos
@@ -74,58 +174,33 @@ class AnnotationIn(BaseModel):
     seconds: float = 0
 
 
-class GoldIn(BaseModel):
-    items: list[ItemIn]
-    note: str = ""
-
-
-class UserIn(BaseModel):
-    name: str
-    role: Literal["annotator", "reviewer", "admin"] = "annotator"
-
-
 class SentencesIn(BaseModel):
     lines: list[str]
-    batch: str = ""
-    pilot: bool = False
 
 
-class AssignIn(BaseModel):
-    coverage: int = 2
-    triple_fraction: float = 0.0
-    blind_fraction: float = 0.0
-    seed: int | None = None
-    batch: str | None = None
-    include_reviewers: bool = False
-
-
-class ActiveIn(BaseModel):
-    active: bool
+class SettingsIn(BaseModel):
+    sentences_per_student: int | None = Field(default=None, ge=1, le=500)
+    registration_open: bool | None = None
 
 
 def _items(con, items: list[ItemIn]):
     try:
-        return review.validate_items(con, [i.model_dump() for i in items])
-    except review.BadItems as e:
+        return items_mod.validate_items(con, [i.model_dump() for i in items])
+    except items_mod.BadItems as e:
         raise HTTPException(422, str(e))
-
-
-def _ensure_catalog(con):
-    if not db.get_setting(con, "catalog_version"):
-        raise HTTPException(409, "El catálogo de ARASAAC aún no está cargado (manage.py catalog download)")
 
 
 # ------------------------------------------------------------------ general
 
 @app.get("/api/me")
 def me(user=Depends(current_user), con=Depends(db.get_db)):
-    return {"id": user["id"], "name": user["name"], "role": user["role"],
-            "catalog": catalog.status(con), "guide_version": backup.guide_version()}
+    if user["role"] == "annotator":
+        assign.ensure_assignments(con, user["id"])  # completa si el admin subió más oraciones o subió el número
+    return {"id": user["id"], "email": user["email"], "role": user["role"], "guide_version": backup.guide_version()}
 
 
 @app.get("/api/catalog")
 def get_catalog(request: Request, user=Depends(current_user), con=Depends(db.get_db)):
-    _ensure_catalog(con)
     version, payload = catalog.client_payload(con)
     etag = f'"{version}"'
     if request.headers.get("if-none-match") == etag:
@@ -158,14 +233,14 @@ async def get_image(pid: int, request: Request):
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
-# ------------------------------------------------------------------ anotación
+# ------------------------------------------------------------------ anotación (alumnos)
 
 def _assignment(con, sid: int, uid: int):
     row = con.execute(
         "SELECT s.*, a.seq FROM assignments a JOIN sentences s ON s.id=a.sentence_id "
         "WHERE a.sentence_id=? AND a.user_id=?", (sid, uid)).fetchone()
     if not row:
-        raise HTTPException(404, "Esa frase no está asignada a esta persona")
+        raise HTTPException(404, "Esa oración no está asignada a esta cuenta")
     return row
 
 
@@ -173,9 +248,9 @@ def _annotation(con, sid: int, uid: int):
     a = con.execute("SELECT * FROM annotations WHERE sentence_id=? AND user_id=?", (sid, uid)).fetchone()
     if not a:
         return None
-    items = [dict(i) for i in con.execute(
+    its = [dict(i) for i in con.execute(
         "SELECT picto_id, keyword, token FROM annotation_items WHERE annotation_id=? ORDER BY position", (a["id"],))]
-    return {"status": a["status"], "note": a["note"], "items": items, "seconds": a["seconds"]}
+    return {"status": a["status"], "note": a["note"], "items": its, "seconds": a["seconds"]}
 
 
 def _next_pending(con, uid: int, after_seq: int | None = None):
@@ -189,9 +264,9 @@ def _next_pending(con, uid: int, after_seq: int | None = None):
     return r["id"] if r else None
 
 
-def _memory_apply(con, uid: int, items, delta: int):
+def _memory_apply(con, uid: int, its, delta: int):
     ts = db.now()
-    for it in items:
+    for it in its:
         tok = it["token"]
         if not tok:
             continue
@@ -200,10 +275,6 @@ def _memory_apply(con, uid: int, items, delta: int):
             "ON CONFLICT(lemma, picto_id, user_id) DO UPDATE SET count=count+?, last_used=?",
             (tok, it["picto_id"], uid, max(delta, 0), ts, delta, ts))
     con.execute("DELETE FROM choice_memory WHERE count<=0")
-
-
-def _team_memory(con) -> bool:
-    return db.get_setting(con, "team_memory", "0") == "1"
 
 
 @app.get("/api/my/queue")
@@ -222,31 +293,26 @@ def my_next(user=Depends(current_user), con=Depends(db.get_db)):
 
 @app.get("/api/annotate/{sid}")
 def annotate(sid: int, user=Depends(current_user), con=Depends(db.get_db)):
-    _ensure_catalog(con)
     s = _assignment(con, sid, user["id"])
-    blind = bool(s["blind"])
     pos = con.execute("SELECT COUNT(*) FROM assignments WHERE user_id=? AND seq<=?", (user["id"], s["seq"])).fetchone()[0]
     total = con.execute("SELECT COUNT(*) FROM assignments WHERE user_id=?", (user["id"],)).fetchone()[0]
-    analysis = suggest.analyze_sentence(con, s["text"], user["id"], _team_memory(con), blind=blind)
     return {
-        "sentence": {"id": s["id"], "text": s["text"], "blind": blind, "pos": pos, "total": total},
+        "sentence": {"id": s["id"], "text": s["text"], "blind": False, "pos": pos, "total": total},
         "annotation": _annotation(con, sid, user["id"]),
-        "analysis": analysis,
+        "analysis": suggest.analyze_sentence(con, s["text"], user["id"]),
     }
 
 
 @app.put("/api/annotations/{sid}")
 def put_annotation(sid: int, body: AnnotationIn, user=Depends(current_user), con=Depends(db.get_db)):
-    _ensure_catalog(con)
     s = _assignment(con, sid, user["id"])
     if body.status == "done" and not body.items:
-        raise HTTPException(422, "Una frase hecha necesita al menos un pictograma")
-    items = _items(con, body.items)
-    blind = bool(s["blind"])
+        raise HTTPException(422, "Una oración hecha necesita al menos un pictograma")
+    its = _items(con, body.items)
     uid = user["id"]
     ts = db.now()
     existing = con.execute("SELECT * FROM annotations WHERE sentence_id=? AND user_id=?", (sid, uid)).fetchone()
-    final_ids = [i["picto_id"] for i in items]
+    final_ids = [i["picto_id"] for i in its]
 
     if existing:
         if existing["status"] == "done":
@@ -257,10 +323,8 @@ def put_annotation(sid: int, body: AnnotationIn, user=Depends(current_user), con
         con.execute("DELETE FROM annotation_items WHERE annotation_id=?", (existing["id"],))
         aid = existing["id"]
     else:
-        proposal = None
-        if not blind:
-            a = suggest.analyze_sentence(con, s["text"], uid, _team_memory(con))
-            proposal = [x["picto_id"] for x in a["sequence"]]
+        a = suggest.analyze_sentence(con, s["text"], uid)
+        proposal = [x["picto_id"] for x in a["sequence"]]
         seconds = max(0.0, min(body.seconds, 3600))
         aid = None
 
@@ -270,144 +334,64 @@ def put_annotation(sid: int, body: AnnotationIn, user=Depends(current_user), con
     if aid is None:
         cur = con.execute(
             "INSERT INTO annotations(sentence_id, user_id, status, note, proposal, from_suggestion, accepted_unchanged,"
-            " blind, seconds, catalog_version, guide_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (sid, uid, body.status, body.note[:500], json.dumps(proposal) if proposal is not None else None,
-             from_suggestion, unchanged, 1 if blind else 0, seconds, version, backup.guide_version(), ts, ts))
+            " seconds, catalog_version, guide_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, uid, body.status, body.note[:500], json.dumps(proposal), from_suggestion, unchanged,
+             seconds, version, backup.guide_version(), ts, ts))
         aid = cur.lastrowid
     else:
         con.execute(
             "UPDATE annotations SET status=?, note=?, from_suggestion=?, accepted_unchanged=?, seconds=?,"
             " catalog_version=?, guide_version=?, updated_at=? WHERE id=?",
             (body.status, body.note[:500], from_suggestion, unchanged, seconds, version, backup.guide_version(), ts, aid))
-    for pos, it in enumerate(items):
+    for pos, it in enumerate(its):
         con.execute("INSERT INTO annotation_items(annotation_id, position, picto_id, keyword, token) VALUES (?,?,?,?,?)",
                     (aid, pos, it["picto_id"], it["keyword"], it["token"]))
     if body.status == "done":
-        _memory_apply(con, uid, items, 1)
+        _memory_apply(con, uid, its, 1)
     con.commit()
     return {"ok": True, "next": _next_pending(con, uid, s["seq"])}
-
-
-# ------------------------------------------------------------------ revisión
-
-@app.get("/api/review/sentences")
-def review_sentences(filter: str = "needs", min_distance: float = 0.0, limit: int = 200, offset: int = 0,
-                     user=Depends(require("reviewer")), con=Depends(db.get_db)):
-    return review.overview(con, filter, min_distance, limit, offset)
-
-
-@app.get("/api/review/{sid}")
-def review_detail(sid: int, user=Depends(require("reviewer")), con=Depends(db.get_db)):
-    _ensure_catalog(con)
-    d = review.detail(con, sid)
-    if not d:
-        raise HTTPException(404, "Frase no encontrada")
-    d["analysis"] = suggest.analyze_sentence(con, d["sentence"]["text"], None, False)
-    nxt = review.overview(con, "needs", limit=1000)["items"]
-    ids = [r["id"] for r in nxt]
-    d["next_needs"] = next((i for i in ids if i > sid), ids[0] if ids and ids[0] != sid else None)
-    return d
-
-
-@app.put("/api/gold/{sid}")
-def put_gold(sid: int, body: GoldIn, user=Depends(require("reviewer")), con=Depends(db.get_db)):
-    if not con.execute("SELECT 1 FROM sentences WHERE id=?", (sid,)).fetchone():
-        raise HTTPException(404, "Frase no encontrada")
-    try:
-        review.save_gold(con, sid, user["id"], [i.model_dump() for i in body.items], body.note[:500])
-    except review.BadItems as e:
-        raise HTTPException(422, str(e))
-    ov = review.overview(con, "needs", limit=1000)["items"]
-    ids = [r["id"] for r in ov]
-    return {"ok": True, "next": next((i for i in ids if i > sid), ids[0] if ids else None)}
-
-
-@app.post("/api/gold/auto-accept")
-def gold_auto_accept(user=Depends(require("reviewer")), con=Depends(db.get_db)):
-    return {"accepted": review.auto_accept(con, user["id"])}
 
 
 # ------------------------------------------------------------------ administración
 
 @app.get("/api/admin/dashboard")
-def admin_dashboard(user=Depends(require("admin")), con=Depends(db.get_db)):
-    return review.dashboard(con)
+def admin_dashboard(user=Depends(require_admin), con=Depends(db.get_db)):
+    return stats.dashboard(con)
 
 
-@app.get("/api/admin/users")
-def admin_users(user=Depends(require("admin")), con=Depends(db.get_db)):
-    return {"items": [dict(r) for r in con.execute("SELECT id, name, role, active, token FROM users ORDER BY name")]}
-
-
-@app.post("/api/admin/users")
-def admin_add_user(body: UserIn, user=Depends(require("admin")), con=Depends(db.get_db)):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(422, "Falta el nombre")
-    try:
-        cur = con.execute("INSERT INTO users(name, token, role, created_at) VALUES (?,?,?,?)",
-                          (name, db.new_token(), body.role, db.now()))
-    except Exception:
-        raise HTTPException(409, "Ya existe una persona con ese nombre")
+@app.put("/api/admin/settings")
+def admin_settings(body: SettingsIn, user=Depends(require_admin), con=Depends(db.get_db)):
+    if body.sentences_per_student is not None:
+        db.set_setting(con, "sentences_per_student", body.sentences_per_student)
+    if body.registration_open is not None:
+        db.set_setting(con, "registration_open", "1" if body.registration_open else "0")
     con.commit()
-    row = con.execute("SELECT id, name, role, active, token FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
-    return dict(row)
-
-
-@app.post("/api/admin/users/{uid}/regen-token")
-def admin_regen(uid: int, user=Depends(require("admin")), con=Depends(db.get_db)):
-    token = db.new_token()
-    if not con.execute("UPDATE users SET token=? WHERE id=?", (token, uid)).rowcount:
-        raise HTTPException(404, "Persona no encontrada")
-    con.commit()
-    return {"token": token}
-
-
-@app.patch("/api/admin/users/{uid}")
-def admin_user_active(uid: int, body: ActiveIn, user=Depends(require("admin")), con=Depends(db.get_db)):
-    if uid == user["id"] and not body.active:
-        raise HTTPException(422, "No puedes desactivarte a ti mismo")
-    con.execute("UPDATE users SET active=? WHERE id=?", (1 if body.active else 0, uid))
-    con.commit()
-    return {"ok": True}
+    return stats.settings(con)
 
 
 @app.post("/api/admin/sentences")
-def admin_sentences(body: SentencesIn, user=Depends(require("admin")), con=Depends(db.get_db)):
-    return assign_mod.import_sentences(con, body.lines, body.batch, body.pilot)
+def admin_sentences(body: SentencesIn, user=Depends(require_admin), con=Depends(db.get_db)):
+    return assign.import_sentences(con, body.lines)
 
 
-@app.post("/api/admin/assign")
-def admin_assign(body: AssignIn, user=Depends(require("admin")), con=Depends(db.get_db)):
-    roles = ("annotator", "reviewer") if body.include_reviewers else ("annotator",)
-    try:
-        return assign_mod.assign(con, body.coverage, body.triple_fraction, body.blind_fraction,
-                                 body.seed, body.batch, roles)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-
-
-@app.post("/api/admin/backup")
-def admin_backup(user=Depends(require("admin"))):
-    return {"path": backup.run_backup()}
-
-
-@app.post("/api/admin/catalog/freeze")
-def admin_freeze(user=Depends(require("admin")), con=Depends(db.get_db)):
-    try:
-        catalog.freeze(con)
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    return catalog.status(con)
+@app.delete("/api/admin/sentences/unannotated")
+def admin_delete_unannotated(user=Depends(require_admin), con=Depends(db.get_db)):
+    return {"deleted": assign.delete_unannotated(con)}
 
 
 @app.get("/api/admin/export")
-def admin_export(format: Literal["jsonl", "csv"] = "jsonl", user=Depends(require("admin")), con=Depends(db.get_db)):
+def admin_export(format: Literal["jsonl", "csv"] = "jsonl", user=Depends(require_admin), con=Depends(db.get_db)):
     if format == "csv":
         return PlainTextResponse(export.to_csv(con), media_type="text/csv; charset=utf-8",
                                  headers={"Content-Disposition": 'attachment; filename="pictogramas.csv"'})
     return PlainTextResponse(export.to_jsonl(con), media_type="application/x-ndjson; charset=utf-8",
                              headers={"Content-Disposition": 'attachment; filename="pictogramas.jsonl"'})
+
+
+@app.get("/api/admin/backup")
+def admin_backup(user=Depends(require_admin)):
+    path = backup.run_backup()
+    return FileResponse(path, media_type="application/octet-stream", filename="annotator-backup.db")
 
 
 # ------------------------------------------------------------------ frontend (debe ir al final)

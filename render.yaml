@@ -1,0 +1,19 @@
+# Render Blueprint: sube el repositorio a GitHub, en Render elige New > Blueprint y selecciona este repo.
+# El disco persistente (donde vive la base de datos) requiere un plan de pago.
+services:
+  - type: web
+    name: anotador-pictogramas
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: datos
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: ADMIN_PASSWORD       # Render te la pedirá al crear el servicio
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAINS # opcional, p. ej. alumnos.uni.mx  (déjala vacía para permitir cualquier correo)
+        sync: false
+      - key: SENTENCES_PER_STUDENT
+        value: "15"

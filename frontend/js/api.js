@@ -29,7 +29,7 @@ export async function api(path, { method = 'GET', body, raw = false } = {}) {
   } catch {
     throw new ApiError(0, 'No se pudo conectar con el servidor');
   }
-  if (res.status === 401) {
+  if (res.status === 401 && auth.token) {
     window.dispatchEvent(new Event('pa:unauth'));
     throw new ApiError(401, 'Identificación no válida');
   }

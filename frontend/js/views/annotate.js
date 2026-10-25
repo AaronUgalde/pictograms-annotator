@@ -1,4 +1,4 @@
-/* Pantalla de anotación: una frase, secuencia propuesta, guardar y pasar a la siguiente. */
+/* Pantalla de anotación: una oración, secuencia propuesta, guardar y pasar a la siguiente. */
 import { h, toast } from '../util.js';
 import { api } from '../api.js';
 import { createEditor } from '../editor.js';
@@ -6,8 +6,7 @@ import { createEditor } from '../editor.js';
 export async function annotateView(root, ctx, sid) {
   const [data, queue] = await Promise.all([api(`/api/annotate/${sid}`), ctx.getQueue()]);
   const { sentence, annotation, analysis } = data;
-  const blind = sentence.blind;
-  const proposalIds = blind ? [] : analysis.sequence.map((x) => x.picto_id);
+  const proposalIds = analysis.sequence.map((x) => x.picto_id);
 
   const proposalItems = () => analysis.sequence.map((x) => ({
     picto_id: x.picto_id, keyword: x.keyword, token: x.token, segment: x.segment,
@@ -24,7 +23,7 @@ export async function annotateView(root, ctx, sid) {
         return { picto_id: it.picto_id, keyword: it.keyword, token: it.token, segment, conf: null };
       });
     }
-    return blind ? [] : proposalItems();
+    return proposalItems();
   }
 
   let mode = annotation?.status === 'doubtful' ? 'doubtful' : annotation?.status === 'skipped' ? 'skipped' : null;
@@ -41,9 +40,8 @@ export async function annotateView(root, ctx, sid) {
   const btnDoubt = h('button', { class: 'mc-btn', type: 'button', onClick: () => toggle('doubtful') }, 'Dudosa');
   const btnSkip = h('button', { class: 'mc-btn', type: 'button', onClick: () => toggle('skipped') }, 'Omitir');
   const header = h('div', { class: 'head-row' },
-    h('span', { class: 'counter pixel' }, `Frase ${sentence.pos} de ${sentence.total}`),
+    h('span', { class: 'counter pixel' }, `Oración ${sentence.pos} de ${sentence.total}`),
     h('div', { class: 'sentence' }, sentence.text),
-    blind ? h('span', { class: 'badge blind', 'data-tip': 'Modo ciego: sin propuesta del sistema' }, 'A ciegas') : null,
     annotation ? h('span', { class: 'badge ' + (annotation.status === 'done' ? 'ok' : 'warn') },
       { done: 'Hecha', doubtful: 'Dudosa', skipped: 'Omitida' }[annotation.status]) : null,
     btnDoubt, btnSkip);
@@ -55,14 +53,14 @@ export async function annotateView(root, ctx, sid) {
   const btnSave = h('button', { class: 'mc-btn primary', type: 'button', onClick: save }, 'Guardar y siguiente ▶');
   const footer = h('div', {},
     h('div', { class: 'actions' }, btnPrev, noteInput,
-      blind || !proposalIds.length ? null : [btnRestore, btnAccept], h('span', { class: 'spacer' }), btnSave),
+      !proposalIds.length ? null : [btnRestore, btnAccept], h('span', { class: 'spacer' }), btnSave),
     h('div', { class: 'hint', style: { marginTop: '6px' } },
       h('kbd', {}, '1'), '–', h('kbd', {}, '9'), ' casilla · ', h('kbd', {}, 'Mayús'), '+clic añade al final · ',
       h('kbd', {}, 'Supr'), ' quita · ', h('kbd', {}, 'Ctrl'), '+', h('kbd', {}, 'Z'), ' deshace · ',
       h('kbd', {}, '/'), ' busca · ', h('kbd', {}, 'Ctrl'), '+', h('kbd', {}, 'Intro'), ' guarda · ', h('kbd', {}, '?'), ' guía'));
 
   ed = createEditor({
-    catalog: ctx.catalog, userId: ctx.me.id, analysis, items: initialItems(), header, footer, blind,
+    catalog: ctx.catalog, userId: ctx.me.id, analysis, items: initialItems(), header, footer,
     onSubmit: () => save(),
   });
   root.append(ed.el);
@@ -106,7 +104,7 @@ export async function annotateView(root, ctx, sid) {
     const note = noteInput.value.trim();
     const status = mode || 'done';
     if (status === 'done' && !items.length) return toast('Añade al menos un pictograma, o márcala como omitida.', 'error');
-    if (status === 'doubtful' && !items.length) return toast('Una frase dudosa necesita al menos un pictograma.', 'error');
+    if (status === 'doubtful' && !items.length) return toast('Una oración dudosa necesita al menos un pictograma.', 'error');
     if (status !== 'done' && !note) { noteInput.focus(); return toast('Escribe una nota breve que explique la duda.', 'error'); }
     saving = true; btnSave.disabled = true;
     try {

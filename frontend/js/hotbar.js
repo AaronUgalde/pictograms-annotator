@@ -27,7 +27,7 @@ export class Hotbar {
     this.slots = [];
 
     bar.setAttribute('role', 'listbox');
-    bar.setAttribute('aria-label', 'Secuencia de pictogramas de la frase');
+    bar.setAttribute('aria-label', 'Secuencia de pictogramas de la oración');
     bar.addEventListener('click', (e) => {
       const i = this._index(e);
       if (i >= 0) this.select(i);

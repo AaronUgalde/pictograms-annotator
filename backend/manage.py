@@ -1,17 +1,17 @@
 #!/usr/bin/env python
-"""Línea de órdenes: preparar catálogo, personas, frases, reparto, copias y exportación.
+"""Línea de órdenes (opcional: casi todo se hace desde el panel de administración).
 
 Ejemplos (desde la carpeta backend/):
-    .venv/bin/python manage.py init
-    .venv/bin/python manage.py catalog download
-    .venv/bin/python manage.py user add "Ana" --role admin
-    .venv/bin/python manage.py sentences import ../data/sentences/ejemplo.txt --batch piloto --pilot
-    .venv/bin/python manage.py assign --coverage 2 --triple-fraction 0.1 --blind-fraction 0.1 --seed 1
-    .venv/bin/python manage.py serve --host 0.0.0.0
+    python manage.py sentences import ../data/sentences/ejemplo.txt
+    python manage.py export --format csv --out resultados.csv
+    python manage.py backup
+    python manage.py prefetch-images
+    python manage.py serve --host 0.0.0.0
 """
 import argparse
 import asyncio
 import csv
+import os
 import sys
 from pathlib import Path
 
@@ -54,25 +54,6 @@ def cmd_catalog(args):
         con.close()
 
 
-def cmd_user(args):
-    con = _con()
-    try:
-        if args.action == "add":
-            try:
-                con.execute("INSERT INTO users(name, token, role, created_at) VALUES (?,?,?,?)",
-                            (args.name, db.new_token(), args.role, db.now()))
-            except Exception:
-                sys.exit("Ya existe una persona con ese nombre.")
-            con.commit()
-        rows = con.execute("SELECT name, role, active, token FROM users ORDER BY name").fetchall()
-        base = args.base_url.rstrip("/")
-        for r in rows:
-            if args.action == "list" or r["name"] == args.name:
-                print(f'{r["name"]:<24} {r["role"]:<10} {"activo" if r["active"] else "inactivo":<9} {base}/?t={r["token"]}')
-    finally:
-        con.close()
-
-
 def _read_lines(path: Path) -> list[str]:
     if path.suffix.lower() == ".csv":
         with path.open(encoding="utf-8-sig", newline="") as f:
@@ -89,21 +70,8 @@ def _read_lines(path: Path) -> list[str]:
 def cmd_sentences(args):
     con = _con()
     try:
-        res = assign_mod.import_sentences(con, _read_lines(Path(args.file)), args.batch, args.pilot)
+        res = assign_mod.import_sentences(con, _read_lines(Path(args.file)))
         print(res)
-    finally:
-        con.close()
-
-
-def cmd_assign(args):
-    con = _con()
-    try:
-        roles = ("annotator", "reviewer") if args.include_reviewers else ("annotator",)
-        res = assign_mod.assign(con, args.coverage, args.triple_fraction, args.blind_fraction,
-                                args.seed, args.batch, roles)
-        loads = res.pop("load")
-        print(res)
-        print("Carga por persona (id: frases):", loads)
     finally:
         con.close()
 
@@ -161,7 +129,8 @@ def cmd_prefetch(args):
 
 def cmd_serve(args):
     import uvicorn
-    uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run("app.main:app", host=args.host, port=args.port, reload=args.reload,
+                proxy_headers=True, forwarded_allow_ips="*")
 
 
 def main():
@@ -176,28 +145,10 @@ def main():
     c.add_argument("--force", action="store_true", help="reemplazar aunque esté congelado")
     c.set_defaults(fn=cmd_catalog)
 
-    u = sub.add_parser("user")
-    u.add_argument("action", choices=["add", "list"])
-    u.add_argument("name", nargs="?")
-    u.add_argument("--role", choices=["annotator", "reviewer", "admin"], default="annotator")
-    u.add_argument("--base-url", default="http://localhost:8000")
-    u.set_defaults(fn=cmd_user)
-
     s = sub.add_parser("sentences")
     s.add_argument("action", choices=["import"])
     s.add_argument("file")
-    s.add_argument("--batch", default="")
-    s.add_argument("--pilot", action="store_true")
     s.set_defaults(fn=cmd_sentences)
-
-    a = sub.add_parser("assign")
-    a.add_argument("--coverage", type=int, default=2)
-    a.add_argument("--triple-fraction", type=float, default=0.0)
-    a.add_argument("--blind-fraction", type=float, default=0.0)
-    a.add_argument("--seed", type=int)
-    a.add_argument("--batch")
-    a.add_argument("--include-reviewers", action="store_true")
-    a.set_defaults(fn=cmd_assign)
 
     sub.add_parser("backup").set_defaults(fn=cmd_backup)
 
@@ -212,13 +163,11 @@ def main():
 
     v = sub.add_parser("serve")
     v.add_argument("--host", default="127.0.0.1")
-    v.add_argument("--port", type=int, default=8000)
+    v.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     v.add_argument("--reload", action="store_true")
     v.set_defaults(fn=cmd_serve)
 
     args = p.parse_args()
-    if args.cmd == "user" and args.action == "add" and not args.name:
-        p.error("falta el nombre")
     if args.cmd == "catalog" and args.action == "load" and not args.path:
         p.error("falta la ruta")
     args.fn(args)

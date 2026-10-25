@@ -1,4 +1,4 @@
-"""SQLite en modo WAL: frases, asignaciones, anotaciones, referencia dorada, catálogo y memoria."""
+"""SQLite en modo WAL: alumnos (por correo), oraciones, asignaciones, anotaciones, catálogo y memoria personal."""
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -8,22 +8,17 @@ from . import config
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,          -- correo en minúsculas (el administrador usa 'admin')
     token TEXT UNIQUE NOT NULL,
-    role TEXT NOT NULL DEFAULT 'annotator' CHECK (role IN ('annotator','reviewer','admin')),
+    role TEXT NOT NULL DEFAULT 'annotator' CHECK (role IN ('annotator','admin')),
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sentences (
     id INTEGER PRIMARY KEY,
-    text TEXT NOT NULL,
-    batch TEXT NOT NULL DEFAULT '',
-    target_coverage INTEGER NOT NULL DEFAULT 2,
-    blind INTEGER NOT NULL DEFAULT 0,
-    is_pilot INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    UNIQUE (text, batch)
+    text TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -41,10 +36,9 @@ CREATE TABLE IF NOT EXISTS annotations (
     user_id INTEGER NOT NULL REFERENCES users(id),
     status TEXT NOT NULL CHECK (status IN ('done','doubtful','skipped')),
     note TEXT NOT NULL DEFAULT '',
-    proposal TEXT,                       -- JSON con los IDs propuestos (NULL en modo ciego)
+    proposal TEXT,                       -- JSON con los IDs propuestos por el sistema
     from_suggestion INTEGER NOT NULL DEFAULT 0,
     accepted_unchanged INTEGER NOT NULL DEFAULT 0,
-    blind INTEGER NOT NULL DEFAULT 0,
     seconds REAL NOT NULL DEFAULT 0,
     catalog_version TEXT NOT NULL,
     guide_version TEXT NOT NULL,
@@ -60,24 +54,6 @@ CREATE TABLE IF NOT EXISTS annotation_items (
     keyword TEXT NOT NULL DEFAULT '',
     token TEXT,
     PRIMARY KEY (annotation_id, position)
-);
-
-CREATE TABLE IF NOT EXISTS gold (
-    sentence_id INTEGER PRIMARY KEY REFERENCES sentences(id) ON DELETE CASCADE,
-    adjudicator_id INTEGER NOT NULL REFERENCES users(id),
-    note TEXT NOT NULL DEFAULT '',
-    catalog_version TEXT NOT NULL,
-    guide_version TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS gold_items (
-    sentence_id INTEGER NOT NULL REFERENCES gold(sentence_id) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    picto_id INTEGER NOT NULL,
-    keyword TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (sentence_id, position)
 );
 
 CREATE TABLE IF NOT EXISTS catalog (
@@ -133,9 +109,26 @@ def connect(path=None) -> sqlite3.Connection:
     return con
 
 
+def _migrate(con: sqlite3.Connection) -> None:
+    """Pasa una base de la versión anterior (con revisores y enlaces personales) a la actual."""
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(users)")}
+    if "name" in cols and "email" not in cols:
+        con.execute("ALTER TABLE users RENAME COLUMN name TO email")
+        # Cuentas de prueba antiguas (sin correo y sin anotaciones): fuera.
+        stale = ("SELECT id FROM users WHERE email NOT LIKE '%@%' AND email <> 'admin' "
+                 "AND id NOT IN (SELECT user_id FROM annotations)")
+        con.execute(f"DELETE FROM assignments WHERE user_id IN ({stale})")
+        con.execute(f"DELETE FROM choice_memory WHERE user_id IN ({stale})")
+        con.execute(f"DELETE FROM users WHERE id IN ({stale})")
+        # El panel de administración ahora se abre con contraseña, no con enlace personal.
+        con.execute("UPDATE users SET role='annotator' WHERE role<>'annotator' AND email<>'admin'")
+        con.commit()
+
+
 def init_db(path=None) -> None:
     con = connect(path)
     con.executescript(SCHEMA)
+    _migrate(con)
     con.commit()
     con.close()
 
@@ -163,4 +156,4 @@ def set_setting(con, key, value) -> None:
 
 
 def new_token() -> str:
-    return secrets.token_urlsafe(12)
+    return secrets.token_urlsafe(16)

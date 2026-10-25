@@ -5,6 +5,8 @@ _tmp = tempfile.mkdtemp(prefix="annotator-test-")
 os.environ["ANNOTATOR_DATA_DIR"] = _tmp
 os.environ["ANNOTATOR_NLP"] = "simple"
 os.environ["BACKUP_INTERVAL_HOURS"] = "0"
+os.environ["ADMIN_PASSWORD"] = "clave-de-prueba"
+os.environ["ANNOTATOR_DB"] = os.path.join(_tmp, "annotator.db")
 
 import pytest  # noqa: E402
 

@@ -1,0 +1,10 @@
+# Para un servidor propio (VPS, equipo de la universidad):  docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env          # copia .env.example a .env y pon tu ADMIN_PASSWORD
+    volumes:
+      - ./datos:/data       # aquí queda la base de datos: haz copias de esta carpeta

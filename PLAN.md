@@ -1,3 +1,5 @@
+> **Nota:** este documento es el plan original (30 anotadores, revisores, adjudicación, modo ciego). La aplicación actual está simplificada: los alumnos entran solo con su correo, no hay revisores y el reparto es automático. Para saber cómo funciona hoy, lee el [README](README.md).
+
 # Pictograms Annotator: plan del proyecto
 
 Herramienta para anotar frases en español con secuencias de pictogramas ARASAAC, con una interfaz inspirada en el inventario del modo creativo de Minecraft.

@@ -35,7 +35,7 @@ def test_blind_mode_has_no_proposal(con):
 
 
 def test_personal_memory_wins(con):
-    con.execute("INSERT INTO users(id,name,token,role,created_at) VALUES (1,'a','t1','annotator','x')")
+    con.execute("INSERT INTO users(id,email,token,role,created_at) VALUES (1,'a','t1','annotator','x')")
     con.execute("INSERT INTO choice_memory VALUES ('helado',6,1,3,'x')")
     con.commit()
     a = suggest.analyze_sentence(con, "helado", user_id=1)
