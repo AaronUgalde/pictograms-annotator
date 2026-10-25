@@ -54,48 +54,65 @@ La propuesta inicial sale de un diccionario (el catálogo de ARASAAC) y de un an
 
 ## Publicar la aplicación (deploy)
 
-La aplicación es **un solo contenedor Docker** (API + interfaz) con una base SQLite. Lo único que necesita es:
+La aplicación es **un solo contenedor Docker** (API + interfaz). Los datos (alumnos, oraciones y respuestas) se guardan en:
 
-1. La variable **`ADMIN_PASSWORD`** (obligatoria).
-2. Un **disco persistente montado en `/data`**. Ahí vive la base de datos; sin disco persistente, las respuestas se pierden en cada reinicio.
-3. Una sola instancia (no escalar a varias réplicas: SQLite escribe desde un único servidor).
+- **PostgreSQL**, si defines la variable `DATABASE_URL`. Es lo que permite usar servidores gratuitos sin disco, como Render + Neon.
+- **SQLite** (archivo `/data/annotator.db`) en cualquier otro caso. Para eso hace falta un disco persistente montado en `/data`.
 
-El catálogo de ARASAAC viaja dentro de la imagen y se carga solo en el primer arranque. Las imágenes de los pictogramas se descargan de ARASAAC la primera vez que alguien las ve y quedan guardadas en `/data/images`. Necesita unos 300 MB de RAM: usa al menos 512 MB, mejor 1 GB.
+El catálogo de pictogramas viaja dentro de la imagen y se reconstruye solo en cada arranque (tarda un segundo), así que no necesita guardarse en ningún lado. Usa una sola instancia del servicio. Necesita unos 300 MB de RAM.
 
 Variables disponibles (ver `.env.example`):
 
 | Variable | Para qué | Valor por defecto |
 |---|---|---|
 | `ADMIN_PASSWORD` | Contraseña del panel | — (obligatoria) |
+| `DATABASE_URL` | Base PostgreSQL (Neon). Sin ella se usa SQLite | vacío |
 | `ALLOWED_EMAIL_DOMAINS` | Solo esos dominios pueden crear cuenta, p. ej. `alumnos.uni.mx` | vacío = cualquier correo |
 | `SENTENCES_PER_STUDENT` | Valor inicial de oraciones por alumno | `15` |
-| `BACKUP_INTERVAL_HOURS` | Copia automática de la base en `/data/backups` | `6` |
+| `BACKUP_INTERVAL_HOURS` | Copia automática de la base SQLite en `/data/backups` (no se usa con PostgreSQL) | `6` |
 
-### Opción A: Render (lo más sencillo)
+### Opción A (gratis): Render + Neon
+
+**1. Base de datos en Neon**
+
+1. Crea una cuenta en [neon.com](https://neon.com) (no pide tarjeta) y un proyecto nuevo, con la región más cercana, por ejemplo *AWS US East (Ohio)*.
+2. En el panel del proyecto pulsa **Connect** y copia la *connection string*. Se ve así: `postgresql://usuario:clave@ep-xxxx.us-east-2.aws.neon.tech/neondb?sslmode=require`.
+
+La aplicación crea sus tablas sola al arrancar. El plan gratuito da 0.5 GB, de sobra para miles de respuestas.
+
+**2. Aplicación en Render**
 
 1. Sube este repositorio a GitHub.
-2. En [render.com](https://render.com): **New → Blueprint**, elige el repositorio. Render lee `render.yaml`, crea el servicio con su disco de 1 GB en `/data` y te pide `ADMIN_PASSWORD`.
-3. Cuando termine, comparte la URL `https://….onrender.com` con los alumnos.
+2. En [render.com](https://render.com): **New → Blueprint** y elige el repositorio. Render lee `render.yaml` y te pide:
+   - `DATABASE_URL`: la cadena de Neon;
+   - `ADMIN_PASSWORD`: tu contraseña del panel;
+   - `ALLOWED_EMAIL_DOMAINS`: opcional, puedes dejarla vacía.
+3. Espera a que termine la construcción (10–15 minutos la primera vez) y comparte la URL `https://….onrender.com`.
 
-El disco persistente de Render requiere un plan de pago (Starter). El plan gratuito no sirve porque borra los datos.
+**Limitaciones del plan gratuito:**
 
-### Opción B: Fly.io
+- El servicio **se duerme tras 15 minutos sin visitas**. La siguiente visita tarda alrededor de un minuto en cargar; después funciona normal. Avisa a los alumnos, o abre tú la página unos minutos antes de la clase.
+- La base de Neon también se duerme sola y despierta en unos segundos con la primera consulta.
+- Los pictogramas se vuelven a descargar de ARASAAC después de cada reinicio. Es automático; solo la primera carga es algo más lenta.
+- No hay copia `.db`: el respaldo es **descargar el CSV o el JSONL** desde el panel. Neon guarda además un historial corto que permite restaurar.
+
+Para actualizar la aplicación basta con hacer `git push`: Render vuelve a desplegar solo, y los datos siguen en Neon.
+
+### Opción B (gratis): servidor propio (Oracle Cloud Always Free o cualquier VPS)
+
+Siempre encendido y sin base externa, pero hay que administrar la máquina. Con Docker instalado:
 
 ```bash
-fly launch --no-deploy --copy-config      # cambia el nombre "app" en fly.toml si ya está ocupado
-fly volumes create datos --size 1 --region qro
-fly secrets set ADMIN_PASSWORD='una-clave-larga'
-fly deploy
+cp .env.example .env     # pon ADMIN_PASSWORD y DOMAIN (sin dominio: TU-IP-con-guiones.sslip.io)
+docker compose -f docker-compose.vps.yml up -d --build
 ```
 
-### Opción C: un servidor propio (VPS o equipo de la universidad)
+Caddy obtiene el certificado HTTPS automáticamente. Los datos quedan en la carpeta `./datos`: respáldala. Abre los puertos 80 y 443 en el firewall del proveedor (en Oracle, también en el `iptables` de la máquina).
 
-```bash
-cp .env.example .env        # y edita ADMIN_PASSWORD
-docker compose up -d --build
-```
+### Otras
 
-La aplicación queda en el puerto 8000 y los datos en la carpeta `./datos`. Para publicarla con HTTPS, ponla detrás de un proxy como Caddy o Nginx.
+- `docker-compose.yml`: lo mismo que la opción B pero sin HTTPS, en el puerto 8000. Útil en una red local.
+- `fly.toml`: Fly.io con un volumen en `/data` (de pago).
 
 ### Después de publicar
 
@@ -117,6 +134,7 @@ pip install "es_core_news_md @ https://github.com/explosion/spacy-models/release
 
 ADMIN_PASSWORD=prueba python manage.py serve      # http://localhost:8000
 python -m pytest                                    # pruebas (no necesitan red ni spaCy)
+TEST_DATABASE_URL=postgresql://... python -m pytest # las mismas pruebas contra PostgreSQL
 ```
 
 También puedes poner las variables en un archivo `.env` en la raíz del proyecto. `manage.py` tiene órdenes opcionales (`sentences import`, `export`, `backup`, `prefetch-images`), pero todo lo habitual se hace desde el panel.
@@ -129,9 +147,9 @@ backend/app/
   assign.py    carga de oraciones y reparto automático
   stats.py     datos del panel (progreso por alumno)
   suggest.py   propuestas de pictogramas (catálogo + spaCy + memoria del alumno)
-  catalog.py   catálogo ARASAAC local
+  catalog.py   catálogo ARASAAC en un SQLite local de solo lectura
   export.py    CSV y JSONL
-  db.py        esquema SQLite
+  db.py        base de datos: PostgreSQL (DATABASE_URL) o SQLite, mismo código
 frontend/      interfaz (HTML, CSS y JavaScript sin dependencias ni compilación)
 data/catalog/  copia versionada del catálogo ARASAAC
 data/sentences/ ejemplos de archivos de oraciones

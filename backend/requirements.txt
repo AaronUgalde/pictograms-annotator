@@ -2,6 +2,9 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
+# PostgreSQL (Neon). Solo se usa si está definida DATABASE_URL.
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
 # spaCy: versiones fijadas porque spacy 3.8.16 + preshed/murmurhash recientes
 # fallan al cargar es_core_news_md ("OverflowError: Python int too large").
 spacy==3.8.7

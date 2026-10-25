@@ -150,7 +150,7 @@ def _confidence(ranked, mem_user, length) -> str:
 
 
 def analyze_sentence(con, text: str, user_id=None, team_memory: bool = False, blind: bool = False) -> dict:
-    idx = catalog.get_index(con)
+    idx = catalog.get_index()
     toks = nlp.analyze(text)
     tokens = [
         {

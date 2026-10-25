@@ -1,19 +1,23 @@
-# Render Blueprint: sube el repositorio a GitHub, en Render elige New > Blueprint y selecciona este repo.
-# El disco persistente (donde vive la base de datos) requiere un plan de pago.
+# Render Blueprint (plan gratuito) + base de datos en Neon (PostgreSQL gratuito).
+# 1. Crea la base en neon.com y copia su "connection string".
+# 2. En Render: New > Blueprint > elige este repositorio. Te pedirá DATABASE_URL y ADMIN_PASSWORD.
+#
+# El plan gratuito no tiene disco persistente: por eso los datos van a Neon. El servicio se duerme
+# tras 15 minutos sin visitas y tarda alrededor de un minuto en despertar.
 services:
   - type: web
     name: anotador-pictogramas
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /healthz
-    disk:
-      name: datos
-      mountPath: /data
-      sizeGB: 1
     envVars:
-      - key: ADMIN_PASSWORD       # Render te la pedirá al crear el servicio
+      - key: DATABASE_URL          # postgresql://…neon.tech/neondb?sslmode=require
         sync: false
-      - key: ALLOWED_EMAIL_DOMAINS # opcional, p. ej. alumnos.uni.mx  (déjala vacía para permitir cualquier correo)
+      - key: ADMIN_PASSWORD        # contraseña del panel de administración
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAINS # opcional, p. ej. alumno.uni.mx (vacía = cualquier correo)
         sync: false
       - key: SENTENCES_PER_STUDENT
         value: "15"
+      - key: BACKUP_INTERVAL_HOURS # las copias locales no sirven sin disco; Neon guarda su historial
+        value: "0"

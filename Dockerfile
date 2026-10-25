@@ -1,4 +1,5 @@
-# Imagen única: API + interfaz. Los datos (base SQLite, imágenes, copias) viven en el volumen /data.
+# Imagen única: API + interfaz. Los datos van a PostgreSQL si hay DATABASE_URL (Render + Neon);
+# si no, a SQLite en /data (monta ahí un disco persistente). /data guarda también caché de imágenes.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -22,7 +23,6 @@ COPY data/catalog data/catalog
 
 RUN useradd --create-home app && mkdir -p /data && chown app:app /data
 USER app
-VOLUME /data
 EXPOSE 8000
 
 WORKDIR /app/backend

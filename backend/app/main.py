@@ -19,29 +19,25 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assign, backup, catalog, config, db, export, items as items_mod, stats, suggest
+from . import assign, backup, catalog, config, db, export, items as items_mod, nlp, stats, suggest
 
 
 # ------------------------------------------------------------------ ciclo de vida
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db.init_db()
+    print(f"[inicio] base de datos: {db.kind()}")
+    await asyncio.to_thread(db.init_db)
     config.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-    def prepare():
-        con = db.connect()
-        try:
-            catalog.ensure_loaded(con)
-        finally:
-            con.close()
-
-    await asyncio.to_thread(prepare)
+    await asyncio.to_thread(catalog.ensure_loaded)
     if not config.ADMIN_PASSWORD:
         print("[aviso] ADMIN_PASSWORD no está definida: nadie podrá entrar al panel de administración.")
     app.state.http = httpx.AsyncClient(timeout=20, follow_redirects=True)
+    # spaCy tarda en cargar; se hace en segundo plano para que el servidor responda cuanto antes.
+    warm = asyncio.create_task(asyncio.to_thread(nlp.backend))
     task = None
-    if config.BACKUP_INTERVAL_HOURS > 0:
+    # Copias automáticas solo con SQLite: con PostgreSQL (Neon) el proveedor guarda su propio historial.
+    if config.BACKUP_INTERVAL_HOURS > 0 and not db.using_postgres():
         async def loop():
             while True:
                 await asyncio.sleep(config.BACKUP_INTERVAL_HOURS * 3600)
@@ -50,7 +46,9 @@ async def lifespan(app: FastAPI):
     yield
     if task:
         task.cancel()
+    warm.cancel()
     await app.state.http.aclose()
+    db.close_pool()
 
 
 app = FastAPI(title="Anotador de pictogramas", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -59,7 +57,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {"ok": True, "database": db.kind()}
 
 
 # ------------------------------------------------------------------ identificación
@@ -108,10 +106,10 @@ def login(body: LoginIn, con=Depends(db.get_db)):
     if row is None:
         if db.get_setting(con, "registration_open", "1") != "1":
             raise HTTPException(403, "El registro de cuentas nuevas está cerrado. Pide a tu docente que lo abra.")
-        cur = con.execute("INSERT INTO users(email, token, role, created_at) VALUES (?,?,?,?)",
-                          (email, db.new_token(), "annotator", db.now()))
+        new_id = con.execute("INSERT INTO users(email, token, role, created_at) VALUES (?,?,?,?) RETURNING id",
+                             (email, db.new_token(), "annotator", db.now())).fetchone()["id"]
         con.commit()
-        row = con.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        row = con.execute("SELECT * FROM users WHERE id=?", (new_id,)).fetchone()
         created = True
     elif not row["active"] or row["role"] != "annotator":
         raise HTTPException(403, "Esta cuenta está desactivada.")
@@ -200,8 +198,8 @@ def me(user=Depends(current_user), con=Depends(db.get_db)):
 
 
 @app.get("/api/catalog")
-def get_catalog(request: Request, user=Depends(current_user), con=Depends(db.get_db)):
-    version, payload = catalog.client_payload(con)
+def get_catalog(request: Request, user=Depends(current_user)):
+    version, payload = catalog.client_payload()
     etag = f'"{version}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
@@ -272,7 +270,7 @@ def _memory_apply(con, uid: int, its, delta: int):
             continue
         con.execute(
             "INSERT INTO choice_memory(lemma, picto_id, user_id, count, last_used) VALUES (?,?,?,?,?) "
-            "ON CONFLICT(lemma, picto_id, user_id) DO UPDATE SET count=count+?, last_used=?",
+            "ON CONFLICT(lemma, picto_id, user_id) DO UPDATE SET count=choice_memory.count+?, last_used=?",
             (tok, it["picto_id"], uid, max(delta, 0), ts, delta, ts))
     con.execute("DELETE FROM choice_memory WHERE count<=0")
 
@@ -330,14 +328,14 @@ def put_annotation(sid: int, body: AnnotationIn, user=Depends(current_user), con
 
     from_suggestion = 1 if proposal else 0
     unchanged = 1 if (proposal and proposal == final_ids and body.status == "done") else 0
-    version = db.get_setting(con, "catalog_version")
+    version = catalog.get_index().version
     if aid is None:
-        cur = con.execute(
+        aid = con.execute(
             "INSERT INTO annotations(sentence_id, user_id, status, note, proposal, from_suggestion, accepted_unchanged,"
-            " seconds, catalog_version, guide_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " seconds, catalog_version, guide_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+            " RETURNING id",
             (sid, uid, body.status, body.note[:500], json.dumps(proposal), from_suggestion, unchanged,
-             seconds, version, backup.guide_version(), ts, ts))
-        aid = cur.lastrowid
+             seconds, version, backup.guide_version(), ts, ts)).fetchone()["id"]
     else:
         con.execute(
             "UPDATE annotations SET status=?, note=?, from_suggestion=?, accepted_unchanged=?, seconds=?,"
@@ -390,6 +388,8 @@ def admin_export(format: Literal["jsonl", "csv"] = "jsonl", user=Depends(require
 
 @app.get("/api/admin/backup")
 def admin_backup(user=Depends(require_admin)):
+    if db.using_postgres():
+        raise HTTPException(404, "Con PostgreSQL la copia se hace descargando el CSV o el JSONL")
     path = backup.run_backup()
     return FileResponse(path, media_type="application/octet-stream", filename="annotator-backup.db")
 

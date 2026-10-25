@@ -27,6 +27,11 @@ def _path(env: str, default: Path) -> Path:
 
 DATA_DIR = _path("ANNOTATOR_DATA_DIR", ROOT / "data")
 DB_PATH = _path("ANNOTATOR_DB", DATA_DIR / "annotator.db")
+# Si se define (postgresql://… de Neon, por ejemplo), los datos de la aplicación van a PostgreSQL
+# en lugar del archivo SQLite. Es lo necesario en servidores sin disco persistente (Render gratis).
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+# El catálogo de pictogramas siempre es un SQLite local de solo lectura (se reconstruye solo).
+CATALOG_DB = _path("ANNOTATOR_CATALOG_DB", DATA_DIR / "catalog.db")
 CATALOG_DIR = DATA_DIR / "catalog"
 # Copia del catálogo que viaja con el código; se usa para arrancar sin depender de internet.
 CATALOG_SEED_DIR = _path("ANNOTATOR_CATALOG_SEED", ROOT / "data" / "catalog")

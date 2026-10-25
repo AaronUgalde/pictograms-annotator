@@ -28,30 +28,22 @@ def _con():
 
 def cmd_init(args):
     db.init_db()
-    print(f"Base de datos lista en {config.DB_PATH}")
+    print("Base de datos lista:", "PostgreSQL (DATABASE_URL)" if db.using_postgres() else config.DB_PATH)
 
 
 def cmd_catalog(args):
-    con = _con()
-    try:
-        if args.action == "download":
-            print("Descargando catálogo completo de ARASAAC (unos 8 MB)…")
-            version, raw, path = catalog.download()
-            n = catalog.ingest(con, raw, version, force=args.force)
-            print(f"{n} pictogramas cargados. Versión: {version}\nCopia: {path}")
-        elif args.action == "load":
-            version, raw = catalog.load_snapshot(args.path)
-            n = catalog.ingest(con, raw, version, force=args.force)
-            print(f"{n} pictogramas cargados desde {args.path}. Versión: {version}")
-        elif args.action == "freeze":
-            catalog.freeze(con)
-            print("Catálogo congelado:", catalog.status(con))
-        else:
-            print(catalog.status(con))
-    except catalog.CatalogFrozen as e:
-        sys.exit(str(e))
-    finally:
-        con.close()
+    """El catálogo se carga solo al arrancar; esto sirve para cambiarlo a mano (cambia los IDs disponibles)."""
+    if args.action == "download":
+        print("Descargando catálogo completo de ARASAAC (unos 8 MB)…")
+        version, raw, path = catalog.download()
+        n = catalog.ingest(raw, version)
+        print(f"{n} pictogramas cargados. Versión: {version}\nCopia: {path}")
+    elif args.action == "load":
+        version, raw = catalog.load_snapshot(args.path)
+        n = catalog.ingest(raw, version)
+        print(f"{n} pictogramas cargados desde {args.path}. Versión: {version}")
+    else:
+        print(catalog.status())
 
 
 def _read_lines(path: Path) -> list[str]:
@@ -140,9 +132,8 @@ def main():
     sub.add_parser("init").set_defaults(fn=cmd_init)
 
     c = sub.add_parser("catalog")
-    c.add_argument("action", choices=["download", "load", "freeze", "status"])
+    c.add_argument("action", choices=["download", "load", "status"])
     c.add_argument("path", nargs="?")
-    c.add_argument("--force", action="store_true", help="reemplazar aunque esté congelado")
     c.set_defaults(fn=cmd_catalog)
 
     s = sub.add_parser("sentences")

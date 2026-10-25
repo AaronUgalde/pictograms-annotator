@@ -19,7 +19,7 @@ def dashboard(con) -> dict:
 
     coverage = {"0": 0, "1": 0, "2+": 0}
     for r in con.execute("""SELECT c, COUNT(*) n FROM (
-            SELECT (SELECT COUNT(*) FROM annotations n WHERE n.sentence_id=s.id) c FROM sentences s) GROUP BY c"""):
+            SELECT (SELECT COUNT(*) FROM annotations n WHERE n.sentence_id=s.id) c FROM sentences s) AS t GROUP BY c"""):
         coverage["0" if r["c"] == 0 else "1" if r["c"] == 1 else "2+"] += r["n"]
 
     finished_students = sum(1 for s in students if s["assigned"] and s["remaining"] == 0)
@@ -41,4 +41,5 @@ def settings(con) -> dict:
         "sentences_per_student": assign.per_student(con),
         "registration_open": db.get_setting(con, "registration_open", "1") == "1",
         "allowed_domains": config.ALLOWED_EMAIL_DOMAINS,
+        "database": db.kind(),
     }

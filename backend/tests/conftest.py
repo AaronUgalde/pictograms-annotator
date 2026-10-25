@@ -7,6 +7,8 @@ os.environ["ANNOTATOR_NLP"] = "simple"
 os.environ["BACKUP_INTERVAL_HOURS"] = "0"
 os.environ["ADMIN_PASSWORD"] = "clave-de-prueba"
 os.environ["ANNOTATOR_DB"] = os.path.join(_tmp, "annotator.db")
+# Para probar contra PostgreSQL:  TEST_DATABASE_URL=postgresql://… python -m pytest
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "")
 
 import pytest  # noqa: E402
 
@@ -32,12 +34,21 @@ FAKE = [
 ]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def fake_catalog():
+    catalog.ingest(FAKE, "test-v1")
+
+
 @pytest.fixture()
 def con():
-    for f in config.DB_PATH.parent.glob("annotator.db*"):
-        f.unlink()
+    if db.using_postgres():
+        c = db.connect()
+        db.drop_all(c)
+        c.close()
+    else:
+        for f in config.DB_PATH.parent.glob("annotator.db*"):
+            f.unlink()
     db.init_db()
     c = db.connect()
-    catalog.ingest(c, FAKE, "test-v1", force=True)
     yield c
     c.close()

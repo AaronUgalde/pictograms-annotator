@@ -4,10 +4,10 @@ from app import assign, db
 
 
 def student(con, n):
-    cur = con.execute("INSERT INTO users(email,token,role,created_at) VALUES (?,?,?,?)",
-                      (f"s{n}@x.com", f"tok{n}", "annotator", "x"))
+    uid = con.execute("INSERT INTO users(email,token,role,created_at) VALUES (?,?,?,?) RETURNING id",
+                      (f"s{n}@x.com", f"tok{n}", "annotator", "x")).fetchone()["id"]
     con.commit()
-    return cur.lastrowid
+    return uid
 
 
 def counts(con):

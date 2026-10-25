@@ -119,7 +119,8 @@ def test_full_flow_progress_and_export(con, client):
     assert len(jl) == 3
     csv_text = client.get("/api/admin/export?format=csv", headers=a).text
     assert "uno@x.com" in csv_text and "catalog_version" in csv_text
-    assert client.get("/api/admin/backup", headers=a).status_code == 200
+    from app import db
+    assert client.get("/api/admin/backup", headers=a).status_code == (404 if db.using_postgres() else 200)
 
 
 def test_raising_n_tops_up_on_next_visit(client):
@@ -155,3 +156,22 @@ def test_migration_from_old_schema(tmp_path):
     rows = {r["email"]: r["role"] for r in con.execute("SELECT email, role FROM users")}
     # Las cuentas viejas sin correo y sin anotaciones ('Tu nombre', 'prueba') se borran; la que tiene anotaciones se conserva.
     assert rows == {"real@x.com": "annotator", "antigua": "annotator"}
+
+
+def test_concurrent_new_students_get_balanced_sentences(client):
+    """Muchos alumnos entrando a la vez: nadie recibe repetidas y la cobertura queda pareja."""
+    from concurrent.futures import ThreadPoolExecutor
+    from collections import Counter
+
+    a = admin(client)
+    client.post("/api/admin/sentences", headers=a, json={"lines": [f"oración {i}" for i in range(30)]})
+    client.put("/api/admin/settings", headers=a, json={"sentences_per_student": 10})
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        tokens = list(ex.map(lambda i: login(client, f"alumno{i}@x.com"), range(6)))
+    per_sentence = Counter()
+    for t in tokens:
+        ids = [r["id"] for r in client.get("/api/my/queue", headers=t).json()["items"]]
+        assert len(ids) == len(set(ids)) == 10
+        per_sentence.update(ids)
+    # 6 alumnos × 10 = 60 asignaciones sobre 30 oraciones: exactamente 2 cada una
+    assert set(per_sentence.values()) == {2} and len(per_sentence) == 30

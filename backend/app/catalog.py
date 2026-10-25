@@ -1,14 +1,21 @@
-"""Catálogo local de ARASAAC: descarga, instantánea versionada, ingesta en SQLite e índice en memoria."""
+"""Catálogo local de ARASAAC: descarga, instantánea versionada, ingesta en SQLite e índice en memoria.
+
+El catálogo vive en su propio archivo SQLite local (data/catalog.db), separado de la base de la
+aplicación. Es de solo lectura y se reconstruye desde la copia versionada en cada arranque si falta,
+así que no hace falta guardarlo en la base externa (Neon) ni en un disco persistente.
+"""
 import gzip
 import hashlib
 import json
 import re
+import sqlite3
+import threading
 import unicodedata
 from datetime import datetime, timezone
 
 import httpx
 
-from . import config, db
+from . import config
 
 # Pestañas de categoría (en español). Las categorías de ARASAAC vienen en inglés y son
 # 568 distintas, demasiadas para pestañas: se agrupan por etiquetas/categorías de alto nivel.
@@ -30,10 +37,6 @@ GROUPS = [
     ("escuela", "Escuela", {"education", "alphabet", "mathematics"}),
     ("ocio", "Ocio", {"leisure", "sport", "music", "outdoor activity", "physical exercise"}),
 ]
-
-
-class CatalogFrozen(Exception):
-    pass
 
 
 def norm(s: str) -> str:
@@ -83,95 +86,141 @@ def load_snapshot(path):
     return version, data
 
 
+# ---------------------------------------------------------------- base local del catálogo
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS catalog (
+    picto_id INTEGER PRIMARY KEY,
+    main_keyword TEXT NOT NULL,
+    keywords TEXT NOT NULL,              -- JSON: lista de palabras clave
+    groups TEXT NOT NULL,                -- JSON: ids de grupos (pestañas)
+    categories TEXT NOT NULL,            -- JSON: categorías ARASAAC (en inglés)
+    synsets TEXT NOT NULL,               -- JSON: synsets de WordNet
+    popularity INTEGER NOT NULL DEFAULT 0,
+    flags INTEGER NOT NULL DEFAULT 0     -- 1 = sexo, 2 = violencia
+);
+CREATE TABLE IF NOT EXISTS catalog_kw (
+    norm TEXT NOT NULL,
+    picto_id INTEGER NOT NULL,
+    keyword TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    kind TEXT NOT NULL,                  -- 'kw' | 'plural'
+    type INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_kw_norm ON catalog_kw(norm);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"""
+
+
+def connect() -> sqlite3.Connection:
+    config.CATALOG_DB.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(config.CATALOG_DB, timeout=10, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL")
+    con.executescript(SCHEMA)
+    return con
+
+
+def _meta(con, key, default=None):
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def _set_meta(con, key, value) -> None:
+    con.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)))
+
+
 # ---------------------------------------------------------------- ingesta
 
-def ingest(con, raw: list[dict], version: str, force: bool = False) -> int:
-    if db.get_setting(con, "catalog_frozen") == "1" and not force:
-        raise CatalogFrozen("El catálogo está congelado; usa force para reemplazarlo.")
-    con.execute("DELETE FROM catalog_kw")
-    con.execute("DELETE FROM catalog")
-    count = 0
+def ingest(raw: list[dict], version: str) -> int:
+    """Reemplaza el catálogo local por `raw` (lista de pictogramas tal como la entrega ARASAAC)."""
+    pictos, kws_rows = [], []
     for p in raw:
         kws = p.get("keywords") or []
         if not kws or p.get("_id") is None:
             continue
         flags = (1 if p.get("sex") else 0) | (2 if p.get("violence") else 0)
-        con.execute(
-            "INSERT INTO catalog(picto_id, main_keyword, keywords, groups, categories, synsets, popularity, flags)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (
-                p["_id"],
-                kws[0]["keyword"].strip(),
-                json.dumps([k["keyword"].strip() for k in kws], ensure_ascii=False),
-                json.dumps(groups_for(p)),
-                json.dumps(p.get("categories") or []),
-                json.dumps(p.get("synsets") or []),
-                int(p.get("downloads") or 0),
-                flags,
-            ),
-        )
+        pictos.append((
+            p["_id"],
+            kws[0]["keyword"].strip(),
+            json.dumps([k["keyword"].strip() for k in kws], ensure_ascii=False),
+            json.dumps(groups_for(p)),
+            json.dumps(p.get("categories") or []),
+            json.dumps(p.get("synsets") or []),
+            int(p.get("downloads") or 0),
+            flags,
+        ))
         for rank, k in enumerate(kws):
             for kind, text in (("kw", k.get("keyword")), ("plural", k.get("plural"))):
                 n = norm(text or "")
                 if n:
-                    con.execute(
-                        "INSERT INTO catalog_kw(norm, picto_id, keyword, rank, kind, type) VALUES (?,?,?,?,?,?)",
-                        (n, p["_id"], (text or "").strip(), rank, kind, k.get("type")),
-                    )
-        count += 1
-    db.set_setting(con, "catalog_version", version)
-    db.set_setting(con, "catalog_loaded_at", db.now())
-    db.set_setting(con, "catalog_count", count)
-    con.commit()
+                    kws_rows.append((n, p["_id"], (text or "").strip(), rank, kind, k.get("type")))
+    con = connect()
+    try:
+        con.execute("DELETE FROM catalog_kw")
+        con.execute("DELETE FROM catalog")
+        con.executemany("INSERT INTO catalog(picto_id, main_keyword, keywords, groups, categories, synsets,"
+                        " popularity, flags) VALUES (?,?,?,?,?,?,?,?)", pictos)
+        con.executemany("INSERT INTO catalog_kw(norm, picto_id, keyword, rank, kind, type) VALUES (?,?,?,?,?,?)",
+                        kws_rows)
+        _set_meta(con, "version", version)
+        _set_meta(con, "count", len(pictos))
+        _set_meta(con, "loaded_at", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        con.commit()
+    finally:
+        con.close()
     reset_cache()
-    return count
+    return len(pictos)
 
 
-def freeze(con) -> None:
-    if not db.get_setting(con, "catalog_version"):
-        raise ValueError("No hay catálogo cargado.")
-    db.set_setting(con, "catalog_frozen", "1")
-    con.commit()
+def version() -> str | None:
+    con = connect()
+    try:
+        return _meta(con, "version")
+    finally:
+        con.close()
 
 
-def status(con) -> dict:
-    return {
-        "version": db.get_setting(con, "catalog_version"),
-        "frozen": db.get_setting(con, "catalog_frozen") == "1",
-        "count": int(db.get_setting(con, "catalog_count", "0")),
-        "loaded_at": db.get_setting(con, "catalog_loaded_at"),
-    }
+def status() -> dict:
+    con = connect()
+    try:
+        return {"version": _meta(con, "version"), "count": int(_meta(con, "count", "0")),
+                "loaded_at": _meta(con, "loaded_at")}
+    finally:
+        con.close()
 
 
-def ensure_loaded(con) -> str:
-    """Deja el catálogo listo al arrancar (primer despliegue incluido).
+def ensure_loaded() -> str:
+    """Deja el catálogo listo al arrancar (también tras cada reinicio en un servidor sin disco).
 
-    Si la base no tiene catálogo, carga la copia más reciente que viaja con el código (o la que haya en
-    el volumen de datos) y, solo si no existe ninguna, la descarga de ARASAAC. El catálogo queda
-    congelado: todos los alumnos anotan con los mismos IDs.
+    Usa la copia más reciente que viaja con el código (o la que haya en la carpeta de datos) y, solo si
+    no existe ninguna, la descarga de ARASAAC. Así todos los alumnos anotan con los mismos IDs.
     """
-    version = db.get_setting(con, "catalog_version")
-    if version and con.execute("SELECT 1 FROM catalog LIMIT 1").fetchone():
-        return version
+    con = connect()
+    try:
+        current = _meta(con, "version")
+        if current and con.execute("SELECT 1 FROM catalog LIMIT 1").fetchone():
+            return current
+    finally:
+        con.close()
     snapshots = sorted(
         [*config.CATALOG_SEED_DIR.glob("arasaac-*.json.gz"), *config.CATALOG_DIR.glob("arasaac-*.json.gz")],
         key=lambda p: p.name,
     )
     if snapshots:
-        version, raw = load_snapshot(snapshots[-1])
+        ver, raw = load_snapshot(snapshots[-1])
     else:
-        version, raw, _ = download()
-    ingest(con, raw, version, force=True)
-    db.set_setting(con, "catalog_frozen", "1")
-    con.commit()
-    return version
+        ver, raw, _ = download()
+    ingest(raw, ver)
+    return ver
 
 
 # ---------------------------------------------------------------- índice en memoria
 
 class Index:
     def __init__(self, con):
-        self.version = db.get_setting(con, "catalog_version")
+        self.version = _meta(con, "version")
         self.pictos: dict[int, dict] = {}
         self.by_key: dict[str, list[dict]] = {}
         for r in con.execute("SELECT picto_id, main_keyword, groups, popularity, flags FROM catalog"):
@@ -197,49 +246,45 @@ class Index:
         return list(best.values())
 
 
-_index_cache: dict = {}
-_client_cache: dict = {}
+_cache: dict = {}
+_cache_lock = threading.Lock()
 
 
 def reset_cache() -> None:
-    _index_cache.clear()
-    _client_cache.clear()
+    with _cache_lock:
+        _cache.clear()
 
 
-def _db_key(con) -> str:
-    return con.execute("PRAGMA database_list").fetchone()["file"]
+def get_index() -> Index:
+    with _cache_lock:
+        if "index" not in _cache:
+            con = connect()
+            try:
+                if not _meta(con, "version"):
+                    raise LookupError("Catálogo no cargado")
+                _cache["index"] = Index(con)
+            finally:
+                con.close()
+        return _cache["index"]
 
 
-def get_index(con) -> Index:
-    version = db.get_setting(con, "catalog_version")
-    if not version:
-        raise LookupError("Catálogo no cargado")
-    key = (_db_key(con), version)
-    if key not in _index_cache:
-        _index_cache.clear()
-        _index_cache[key] = Index(con)
-    return _index_cache[key]
-
-
-def client_payload(con) -> tuple[str, bytes]:
+def client_payload() -> tuple[str, bytes]:
     """Catálogo compacto para el navegador: [id, principal, palabras, grupos, flags]."""
-    version = db.get_setting(con, "catalog_version")
-    if not version:
-        raise LookupError("Catálogo no cargado")
-    key = (_db_key(con), version)
-    if key not in _client_cache:
-        _client_cache.clear()
-        gidx = {gid: i for i, (gid, _l, _t) in enumerate(GROUPS)}
-        items = []
-        for r in con.execute("SELECT picto_id, main_keyword, keywords, groups, flags FROM catalog ORDER BY picto_id"):
-            items.append(
-                [r["picto_id"], r["main_keyword"], json.loads(r["keywords"]),
-                 [gidx[g] for g in json.loads(r["groups"])], r["flags"]]
-            )
-        payload = {
-            "version": version,
-            "groups": [{"id": gid, "label": label} for gid, label, _t in GROUPS],
-            "items": items,
-        }
-        _client_cache[key] = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    return version, _client_cache[key]
+    with _cache_lock:
+        if "client" not in _cache:
+            con = connect()
+            try:
+                ver = _meta(con, "version")
+                if not ver:
+                    raise LookupError("Catálogo no cargado")
+                gidx = {gid: i for i, (gid, _l, _t) in enumerate(GROUPS)}
+                items = [
+                    [r["picto_id"], r["main_keyword"], json.loads(r["keywords"]),
+                     [gidx[g] for g in json.loads(r["groups"])], r["flags"]]
+                    for r in con.execute("SELECT picto_id, main_keyword, keywords, groups, flags FROM catalog ORDER BY picto_id")
+                ]
+            finally:
+                con.close()
+            payload = {"version": ver, "groups": [{"id": gid, "label": label} for gid, label, _t in GROUPS], "items": items}
+            _cache["client"] = (ver, json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
+        return _cache["client"]

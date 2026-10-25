@@ -7,13 +7,14 @@ from . import config, db, export
 
 
 def run_backup() -> str:
+    """Copia consistente de la base SQLite + exportación JSONL (solo tiene sentido con SQLite)."""
     config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     dest = config.BACKUP_DIR / f"annotator-{ts}.db"
     src = db.connect()
     try:
         dst = sqlite3.connect(dest)
-        src.backup(dst)  # copia consistente aunque haya escrituras en curso
+        src.raw.backup(dst)  # copia consistente aunque haya escrituras en curso
         dst.close()
         (config.BACKUP_DIR / f"export-{ts}.jsonl").write_text(export.to_jsonl(src), encoding="utf-8")
     finally:

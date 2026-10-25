@@ -21,7 +21,7 @@ def import_sentences(con, lines) -> dict:
         text = " ".join((line or "").split())
         if not text:
             continue
-        cur = con.execute("INSERT OR IGNORE INTO sentences(text, created_at) VALUES (?,?)", (text, db.now()))
+        cur = con.execute("INSERT INTO sentences(text, created_at) VALUES (?,?) ON CONFLICT(text) DO NOTHING", (text, db.now()))
         if cur.rowcount:
             added += 1
         else:
@@ -44,8 +44,7 @@ def ensure_assignments(con, user_id: int, n: int | None = None) -> int:
     o el admin subió más o aumentó N, se completa en ese momento.
     """
     n = n or per_student(con)
-    con.commit()
-    con.execute("BEGIN IMMEDIATE")  # evita que dos alumnos nuevos a la vez reciban lo mismo
+    con.lock()  # transacción exclusiva: dos alumnos que entran a la vez no reciben lo mismo
     try:
         have = con.execute("SELECT COUNT(*) FROM assignments WHERE user_id=?", (user_id,)).fetchone()[0]
         need = n - have

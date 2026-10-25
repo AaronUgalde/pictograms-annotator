@@ -54,8 +54,11 @@ def test_exact_accent_beats_accentless_homograph(con):
         P(20, [{"keyword": "papá", "type": 2}], downloads=1),
         P(21, [{"keyword": "papa", "type": 2}], downloads=999),  # más popular: ganaba antes del arreglo
     ]
-    catalog.ingest(con, FAKE + extra, "test-v2", force=True)
-    kws, _ = keywords(con, "papá")
-    assert kws == ["papá"]
-    kws, _ = keywords(con, "papa")
-    assert kws == ["papa"]
+    catalog.ingest(FAKE + extra, "test-v2")
+    try:
+        kws, _ = keywords(con, "papá")
+        assert kws == ["papá"]
+        kws, _ = keywords(con, "papa")
+        assert kws == ["papa"]
+    finally:
+        catalog.ingest(FAKE, "test-v1")  # deja el catálogo de prueba como estaba
