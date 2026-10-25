@@ -1,0 +1,7 @@
+backend/.venv/
+__pycache__/
+.pytest_cache/
+data/annotator.db*
+data/images/
+data/backups/
+.DS_Store

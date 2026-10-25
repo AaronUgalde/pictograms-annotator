@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pictograms Annotator</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/inventory.css">
+  <script>
+    // Tema antes del primer pintado, para evitar el destello.
+    (function () {
+      try {
+        var t = localStorage.getItem('pa.theme');
+        if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <header id="topbar">
+    <h1 class="pixel">Pictogramas</h1>
+    <nav id="nav" aria-label="Principal"></nav>
+    <div id="userbox"></div>
+  </header>
+
+  <main id="app" tabindex="-1"></main>
+
+  <footer id="credits">
+    Pictogramas: <a href="https://arasaac.org" target="_blank" rel="noopener">ARASAAC</a> (Gobierno de Aragón),
+    autor Sergio Palao. Licencia
+    <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.es" target="_blank" rel="noopener">CC BY-NC-SA</a>.
+  </footer>
+
+  <dialog id="dlg" aria-label="Diálogo"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="tip" role="tooltip"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
