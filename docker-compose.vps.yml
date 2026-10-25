@@ -1,0 +1,27 @@
+# Servidor propio con HTTPS automático (Oracle Cloud, Google Cloud, cualquier VPS).
+#   1. cp .env.example .env   y rellena ADMIN_PASSWORD y DOMAIN
+#   2. docker compose -f docker-compose.vps.yml up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./datos:/data          # base de datos, imágenes y copias: respalda esta carpeta
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # certificados HTTPS
+
+volumes:
+  caddy_data:

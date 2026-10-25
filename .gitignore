@@ -6,3 +6,4 @@ data/images/
 data/backups/
 .DS_Store
 .env
+datos/
