@@ -15,6 +15,11 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt \
  && pip install "es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl"
 
+# Vectores de palabras para «Relacionados» (model2vec recortado, ≈90 MB). Capa aparte para que la
+# descarga (≈500 MB) solo se repita si cambia el script.
+COPY tools/build_related.py tools/build_related.py
+RUN python tools/build_related.py
+
 COPY backend backend
 COPY frontend frontend
 COPY docs docs

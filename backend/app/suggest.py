@@ -1,19 +1,22 @@
 """Sugerencias automáticas por capas (sección 7 del plan).
 
 Capas implementadas: (1) lematización con spaCy, (2) coincidencia contra el catálogo local con
-preferencia por expresiones de varias palabras, (3) memoria de decisiones personal.
+preferencia por expresiones de varias palabras, (3) memoria de decisiones personal, (4) pictogramas
+relacionados por significado (related.py). Los relacionados van en una lista aparte: la propuesta
+inicial solo usa coincidencias.
 Deliberadamente NO hay modelo generativo (ver PLAN 13.2) y la memoria de equipo está desactivada
 por defecto porque hace converger a los anotadores y rompe la independencia de las referencias.
 """
 import re
 
-from . import catalog, nlp
+from . import catalog, nlp, related
 from .catalog import norm
 
 # Las palabras con estas categorías gramaticales no se buscan solas (artículos, preposiciones…).
 STOP_POS = {"DET", "ADP", "CCONJ", "SCONJ", "PUNCT", "SPACE", "AUX", "PART", "SYM"}
 MAX_N = 5
 MAX_CANDIDATES = 12
+MAX_RELATED = 8
 # Tipo de palabra clave de ARASAAC: 1 nombre propio, 2 nombre común, 3 verbo, 4 descriptivo,
 # 5 contenido social, 6 miscelánea.
 POS_TYPES = {"VERB": {3}, "NOUN": {1, 2}, "PROPN": {1, 2}, "ADJ": {4}}
@@ -179,6 +182,12 @@ def _confidence(ranked, mem_user, length) -> str:
     return "low"
 
 
+def _related(idx, text: str, exclude) -> list[dict]:
+    """Relacionados por significado con el mismo formato que los candidatos, más la similitud."""
+    return [{"id": r["id"], "keyword": r["keyword"], "main": idx.pictos[r["id"]]["main"], "score": r["score"]}
+            for r in related.related(text, exclude, MAX_RELATED)]
+
+
 def analyze_sentence(con, text: str, user_id=None, team_memory: bool = False, blind: bool = False) -> dict:
     idx = catalog.get_index()
     toks = nlp.analyze(text)
@@ -245,12 +254,18 @@ def analyze_sentence(con, text: str, user_id=None, team_memory: bool = False, bl
             "key": mkey,
             "match_key": match_key,
             "candidates": out_c,
+            "related": _related(idx, " ".join(_lemma(t) for t in window), {c["id"] for c in ranked}),
             "confidence": _confidence(ranked, mem_user.get(mkey, {}), length),
         }
         segments.append(seg)
         for k in range(start, start + length):
             tokens[k]["segment"] = si
         sequence.append({"picto_id": out_c[0]["id"], "keyword": out_c[0]["keyword"], "token": mkey, "segment": si})
+
+    if not blind:  # palabras sin coincidencia: solo relacionados (nunca entran en la propuesta)
+        for t, tok in zip(toks, tokens):
+            if tok["segment"] is None and not tok["skip"] and tok["pos"] not in ("PUNCT", "SPACE"):
+                tok["related"] = _related(idx, _lemma(t), ())
 
     memory = {}
     for key, d in mem_user.items():

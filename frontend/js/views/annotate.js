@@ -54,7 +54,7 @@ export async function annotateView(root, ctx, sid) {
   const footer = h('div', {},
     h('div', { class: 'actions' }, btnPrev, noteInput,
       !proposalIds.length ? null : [btnRestore, btnAccept], h('span', { class: 'spacer' }), btnSave),
-    h('div', { class: 'hint', style: { marginTop: '6px' } },
+    h('div', { class: 'hint', style: { marginTop: '5px' } },
       h('kbd', {}, '1'), '–', h('kbd', {}, '9'), ' casilla · ', h('kbd', {}, 'Mayús'), '+clic añade al final · ',
       h('kbd', {}, 'Supr'), ' quita · ', h('kbd', {}, 'Ctrl'), '+', h('kbd', {}, 'Z'), ' deshace · ',
       h('kbd', {}, '/'), ' busca · ', h('kbd', {}, 'Ctrl'), '+', h('kbd', {}, 'Intro'), ' guarda · ', h('kbd', {}, '?'), ' guía'));

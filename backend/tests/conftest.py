@@ -4,6 +4,7 @@ import tempfile
 _tmp = tempfile.mkdtemp(prefix="annotator-test-")
 os.environ["ANNOTATOR_DATA_DIR"] = _tmp
 os.environ["ANNOTATOR_NLP"] = "simple"
+os.environ["ANNOTATOR_RELATED_DIR"] = os.path.join(_tmp, "sin-vectores")  # test_related.py usa un modelo falso
 os.environ["ADMIN_PASSWORD"] = "clave-de-prueba"
 # Las pruebas usan una base PostgreSQL desechable (SE BORRA en cada prueba). Nunca la de producción:
 #   TEST_DATABASE_URL=postgresql://postgres@localhost:5432/annotator_test python -m pytest

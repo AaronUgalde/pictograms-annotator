@@ -1,6 +1,7 @@
 /* Editor de inventario: palabras de la frase + pestañas/buscador + cuadrícula + secuencia (hotbar) + atajos.
    Lo usan la anotación y la adjudicación. Las vistas aportan la cabecera y el pie (botones de guardar). */
 import { h, isTyping, debounce } from './util.js';
+import { api } from './api.js';
 import { VirtualGrid, ZOOMS } from './grid.js';
 import { Hotbar } from './hotbar.js';
 
@@ -24,9 +25,11 @@ export const toPayload = (items) => items.map(({ picto_id, keyword, token }) => 
  * @param {boolean} o.blind        modo ciego: sin pestaña de sugeridos
  */
 export function createEditor({ catalog, userId, analysis = null, items = [], header = null, footer = null, blind = false, onChange, onSubmit }) {
-  const hasSug = !blind && !!analysis && analysis.segments.length > 0;
+  const hasSug = !blind && !!analysis
+    && (analysis.segments.length > 0 || analysis.tokens.some((t) => t.related?.length));
   const state = { tab: null, prevTab: null, query: '', focus: null };
   let sugMap = new Map(); // id → {segment, key, keyword} de la lista de sugeridos que se está viendo
+  let relIds = new Set(); // ids de la lista que se está viendo que son «relacionados», no coincidencias
 
   // ------------------------------------------------------------ DOM
   const tokensEl = h('div', { class: 'tokens', 'aria-label': 'Palabras de la oración' });
@@ -75,22 +78,36 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
     updateCounts();
   }
 
-  function sugList() {
-    const f = state.focus?.segment;
-    const segs = f != null && analysis.segments[f] ? [analysis.segments[f]] : analysis.segments;
-    const out = [], notes = new Map(), map = new Map();
+  /** Coincidencias primero y, detrás, los relacionados por significado (marcados aparte). */
+  function sugList(all = false) {
+    const f = all ? null : state.focus?.segment;
+    const one = f != null && analysis.segments[f];
+    const segs = one ? [analysis.segments[f]] : analysis.segments;
+    const out = [], notes = new Map(), map = new Map(), related = new Set();
+    const add = (c, note, place, rel) => {
+      const p = catalog.get(c.id);
+      if (!p || map.has(c.id)) return;
+      out.push(p);
+      notes.set(c.id, note);
+      map.set(c.id, place);
+      if (rel) related.add(c.id);
+    };
     for (const s of segs) {
-      for (const c of s.candidates) {
-        const p = catalog.get(c.id);
-        if (!p || map.has(c.id)) continue;
-        out.push(p);
-        notes.set(c.id, `Sugerido para «${s.text}»`);
-        map.set(c.id, { segment: s.index, key: s.key, keyword: c.keyword });
+      for (const c of s.candidates) add(c, `Sugerido para «${s.text}»`, { segment: s.index, key: s.key, keyword: c.keyword });
+    }
+    const relNote = (text) => `Relacionado con «${text}»: parecido en significado, no es coincidencia exacta`;
+    for (const s of segs) {
+      for (const c of s.related || []) add(c, relNote(s.text), { segment: s.index, key: s.key, keyword: c.keyword }, true);
+    }
+    if (!one) {
+      for (const t of analysis.tokens) {
+        for (const c of t.related || []) add(c, relNote(t.text), { segment: null, key: t.key, keyword: c.keyword }, true);
       }
     }
+    const nRel = related.size ? ` · ${related.size} relacionado${related.size === 1 ? '' : 's'}` : '';
     return {
-      items: out, notes, map,
-      text: segs.length === 1 && f != null ? `Alternativas para «${segs[0].text}»` : 'Sugerencias para toda la oración',
+      items: out, notes, map, related,
+      text: (one ? `Alternativas para «${segs[0].text}»` : 'Sugerencias para toda la oración') + nRel,
       empty: 'No hay sugerencias. Usa el buscador o las categorías.',
     };
   }
@@ -118,12 +135,36 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
     text: 'Los últimos que elegiste', empty: 'Aún no has elegido ningún pictograma.',
   });
 
+  // Relacionados del buscador: los calcula el servidor; se guardan por consulta y, al llegar, se
+  // añaden detrás de las coincidencias si la consulta sigue siendo la misma.
+  const relCache = new Map(); // consulta → lista de {id, keyword, score} (null mientras se pide)
+  const fetchRelated = debounce((q) => { // espera a que se deje de escribir: una petición por consulta
+    if (relCache.has(q)) return;
+    relCache.set(q, null);
+    api(`/api/related?q=${encodeURIComponent(q)}`)
+      .then((r) => r.items, () => [])
+      .then((items) => {
+        relCache.set(q, items);
+        if (items.length && state.tab === 'search' && state.query.trim() === q) refreshList({ keep: true });
+      });
+  }, 250);
+  function relatedFor(q) {
+    if (!q || /^\d+$/.test(q)) return [];
+    if (!relCache.has(q)) fetchRelated(q);
+    return relCache.get(q) || [];
+  }
+
   const searchList = () => {
-    const res = state.query.trim() ? catalog.search(state.query) : [];
+    const q = state.query.trim();
+    const res = q ? catalog.search(q) : [];
+    const have = new Set(res.map((p) => p.id));
+    const rel = relatedFor(q).map((r) => catalog.get(r.id)).filter((p) => p && !have.has(p.id) && have.add(p.id));
+    const notes = new Map(rel.map((p) => [p.id, `Relacionado con «${q}»: parecido en significado, no es coincidencia exacta`]));
+    const nRel = rel.length ? ` · ${rel.length} relacionado${rel.length === 1 ? '' : 's'}` : '';
     return {
-      items: res,
-      text: state.query.trim() ? `${res.length} resultado${res.length === 1 ? '' : 's'} para «${state.query.trim()}»` : 'Escribe un nombre o el número de un pictograma',
-      empty: state.query.trim() ? 'Sin resultados. Prueba con otra forma de la palabra (singular, infinitivo…).' : 'Escribe en el buscador de arriba.',
+      items: res.concat(rel), notes, related: new Set(rel.map((p) => p.id)),
+      text: q ? `${res.length} resultado${res.length === 1 ? '' : 's'} para «${q}»${nRel}` : 'Escribe un nombre o el número de un pictograma',
+      empty: q ? 'Sin resultados. Prueba con otra forma de la palabra (singular, infinitivo…).' : 'Escribe en el buscador de arriba.',
     };
   };
 
@@ -167,17 +208,15 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
   function updateCounts() {
     for (const t of tabDefs) {
       let n = '';
-      if (t.id === 'sug') n = sugCount();
+      if (t.id === 'sug') n = sugList(true).items.length;
       else if (t.id === 'mem') n = memList().items.length;
       else if (t.id === 'rec') n = readRecent().length;
-      else if (t.id === 'search') n = state.query.trim() ? catalog.search(state.query).length : '';
+      else if (t.id === 'search') n = state.query.trim() ? searchList().items.length : '';
       else if (t.id === 'all') n = '';
       else n = catalog.groupLists[+t.id.slice(1)].length;
       t.n.textContent = n === '' || n === 0 ? '' : n;
     }
   }
-  const sugCount = () => new Set(analysis.segments.flatMap((s) => s.candidates.map((c) => c.id))).size;
-
   const defaultTab = () => (hasSug ? 'sug' : memList().items.length ? 'mem' : 'g0');
 
   function selectTab(id) {
@@ -191,10 +230,12 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
     tabDefs.find((t) => t.id === id)?.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
-  function refreshList() {
+  /** keep: la lista solo creció por el final (llegaron relacionados); no mover el cursor ni el scroll. */
+  function refreshList({ keep = false } = {}) {
     const l = listFor(state.tab);
     sugMap = l.map || new Map();
-    grid.setItems(l.items, { notes: l.notes || null, emptyText: l.empty });
+    relIds = l.related || new Set();
+    grid.setItems(l.items, { notes: l.notes || null, related: l.related || null, emptyText: l.empty, keep });
     info.textContent = l.text;
     updateCounts();
   }
@@ -238,7 +279,8 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
       const cls = 'chip' + (t.skip ? ' skip' : '') + (nomatch ? ' nomatch' : '') + (used ? ' used' : '')
         + (state.focus?.tokenIdx === idx ? ' active' : '');
       const tip = t.skip ? 'Palabra vacía: normalmente se omite (ver la guía)'
-        : nomatch ? 'Sin sugerencia: pulsa para buscarla' : `Lema: ${t.lemma}`;
+        : nomatch ? (t.related?.length ? 'Sin coincidencia exacta (hay relacionados en Sugeridos): pulsa para buscarla'
+          : 'Sin sugerencia: pulsa para buscarla') : `Lema: ${t.lemma}`;
       tokensEl.append(h('button', { class: cls, type: 'button', 'data-tip': tip, onClick: () => onChip(t, idx) }, t.text));
     });
   }
@@ -276,8 +318,9 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
       e.preventDefault();
       onInput.cancel();
       applyQuery(searchInput.value);
+      // Intro solo coloca una coincidencia: un relacionado se elige a propósito, con clic o flechas.
       const first = state.tab === 'search' ? grid.items[0] : null;
-      if (first) {
+      if (first && !relIds.has(first.id)) {
         pick(first, { shift: e.shiftKey });
         searchInput.value = '';
         applyQuery('');
@@ -342,6 +385,7 @@ export function createEditor({ catalog, userId, analysis = null, items = [], hea
     destroy() {
       document.removeEventListener('keydown', onKey);
       onInput.cancel();
+      fetchRelated.cancel();
       grid.destroy();
     },
   };

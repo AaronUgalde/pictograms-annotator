@@ -151,3 +151,10 @@ def test_concurrent_new_students_get_balanced_sentences(client):
         per_sentence.update(ids)
     # 6 alumnos × 10 = 60 asignaciones sobre 30 oraciones: exactamente 2 cada una
     assert set(per_sentence.values()) == {2} and len(per_sentence) == 30
+
+
+def test_related_requires_login_and_never_fails(client):
+    assert client.get("/api/related?q=agua").status_code == 401
+    s = login(client, "alumno@x.com")
+    r = client.get("/api/related?q=agua", headers=s)
+    assert r.status_code == 200 and r.json() == {"items": []}  # sin tabla de vectores: lista vacía

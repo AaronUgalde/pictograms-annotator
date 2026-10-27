@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assign, catalog, config, db, export, guide, items as items_mod, nlp, stats, suggest
+from . import assign, catalog, config, db, export, guide, items as items_mod, nlp, related, stats, suggest
 
 
 # ------------------------------------------------------------------ ciclo de vida
@@ -32,11 +32,13 @@ async def lifespan(app: FastAPI):
     if not config.ADMIN_PASSWORD:
         print("[aviso] ADMIN_PASSWORD no está definida: nadie podrá entrar al panel de administración.")
     app.state.http = httpx.AsyncClient(timeout=20, follow_redirects=True)
-    # spaCy tarda en cargar; se hace en segundo plano para que el servidor responda cuanto antes.
-    warm = asyncio.create_task(asyncio.to_thread(nlp.backend))
+    # spaCy y los vectores de «Relacionados» tardan en cargar; se hace en segundo plano para que el
+    # servidor responda cuanto antes.
+    warm = [asyncio.create_task(asyncio.to_thread(nlp.backend)), asyncio.create_task(asyncio.to_thread(related.available))]
     print("[inicio] listo")
     yield
-    warm.cancel()
+    for w in warm:
+        w.cancel()
     await app.state.http.aclose()
     db.close_pool()
 
@@ -195,6 +197,12 @@ def get_catalog(request: Request, user=Depends(current_user)):
         return Response(status_code=304, headers={"ETag": etag})
     return Response(payload, media_type="application/json",
                     headers={"ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate"})
+
+
+@app.get("/api/related")
+def get_related(q: str = "", user=Depends(current_user)):
+    """Pictogramas relacionados por significado con lo que se escribe en el buscador (no coincidencias)."""
+    return {"items": related.related(q[:100], limit=40)}
 
 
 @app.get("/api/guide")

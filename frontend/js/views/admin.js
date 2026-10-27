@@ -60,7 +60,7 @@ export async function adminView(root, ctx) {
 
   // ---- ajustes
   function settingsBox(s) {
-    const n = h('input', { type: 'number', min: 1, max: 500, value: s.sentences_per_student, 'aria-label': 'Oraciones por alumno', style: { width: '90px' } });
+    const n = h('input', { type: 'number', min: 1, max: 500, value: s.sentences_per_student, 'aria-label': 'Oraciones por alumno', style: { width: '72px' } });
     const save = h('button', { class: 'mc-btn', type: 'button', onClick: async () => {
       try { await api('/api/admin/settings', { method: 'PUT', body: { sentences_per_student: +n.value } }); toast('Guardado'); load(); } catch (e) { toast(e.message, 'error'); }
     } }, 'Guardar');
@@ -97,7 +97,7 @@ export async function adminView(root, ctx) {
     };
     const search = h('input', { type: 'search', placeholder: 'Buscar correo…', value: filterText, 'aria-label': 'Buscar correo', onInput: () => { filterText = search.value; paint(); } });
     paint();
-    return section('Alumnos', h('div', { class: 'row', style: { marginBottom: '8px' } }, search),
+    return section('Alumnos', h('div', { class: 'row', style: { marginBottom: '6px' } }, search),
       h('table', { class: 'data' },
         h('thead', {}, h('tr', {}, ['Correo', 'Asignadas', 'Hechas', 'Faltan', 'Progreso', 'Estado', 'Última actividad'].map((t) => h('th', {}, t)))), tbody));
   }
@@ -120,7 +120,7 @@ export async function adminView(root, ctx) {
     wrap.replaceChildren(
       section('Resumen',
         cards([['Alumnos', t.students], ['Ya terminaron', `${t.students_finished} de ${t.students}`], ['Oraciones cargadas', t.sentences], ['Respuestas guardadas', t.annotations]]),
-        h('p', { class: 'muted', style: { marginTop: '10px' } },
+        h('p', { class: 'muted', style: { marginTop: '8px' } },
           `Oraciones con ninguna respuesta: ${c['0']} · con una: ${c['1']} · con dos o más: ${c['2+']}`)),
       sentencesBox(t.sentences), settingsBox(d.settings), studentsBox(d.students), dataBox());
   }

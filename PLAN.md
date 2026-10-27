@@ -238,6 +238,7 @@ Recomendación: llegar hasta la fase 4. Antes de la fase 4 debe existir la guía
 - **Medidas de acuerdo.** Porcentaje de coincidencia exacta de secuencias, distancia de edición normalizada entre secuencias de IDs, y acuerdo por posición. Se calculan por pareja de anotadores y por frase, para detectar frases problemáticas y personas que se desvían de la guía.
 - **Sin sesgo del sistema en la anotación.** Las sugerencias no deben provenir del modelo que se va a evaluar. Si el anotador parte de una propuesta parecida a la del modelo, el conjunto favorecería a ese modelo. Reglas:
   - Las sugerencias usan solo diccionario, lemas y memoria personal, nunca un modelo generativo (la fase 5 queda descartada para este dataset).
+  - Los relacionados por significado (vectores de palabras, no generativo) se muestran aparte y marcados; nunca forman parte de la propuesta inicial.
   - En una muestra de frases con solapamiento se ofrece un **modo ciego**: la secuencia empieza vacía.
   - Se registra por cada anotación si partió de una sugerencia y si la aceptó sin cambios, y el tiempo que tomó. Permite analizar el sesgo después.
 
@@ -292,7 +293,7 @@ La guía vive en `docs/criterios-anotacion.md` y se muestra también dentro de l
 |---|---|---|
 | 0 | Sin hacer | Revisar PROPICTO y PictoEduca. De facto se decidió construir; queda documentar la comparación. |
 | 1 | Hecha | Cargar frases, buscar, secuencia, exportar. |
-| 2 | Hecha (capas 1–3) | spaCy, coincidencia con expresiones, memoria personal. La capa 4 (significado con ARASAAC-WN) sigue **opcional y sin hacer**; los `synsets` ya están en el catálogo. |
+| 2 | Hecha (capas 1–4) | spaCy, coincidencia con expresiones, memoria personal. Capa 4: pictogramas **relacionados** por significado con vectores de palabras model2vec (`backend/app/related.py`), en una lista aparte con etiqueta, fuera de la propuesta inicial y desactivados en modo ciego. ARASAAC-WN (los `synsets` ya están en el catálogo) queda como alternativa sin hacer. |
 | 3 | Hecha | Cuadrícula virtualizada, pestañas, buscador (tildes, parcial, ID), secuencia, arrastrar/soltar, papelera, deshacer/rehacer, teclado, vista previa, tooltips, tema claro/oscuro. |
 | 4 | Hecha | Multiusuario por enlace, reparto con solapamiento y modo ciego, adjudicación lado a lado, métricas de acuerdo, panel, copias, exportación. |
 | 5 | Descartada | Ver 13.2. |

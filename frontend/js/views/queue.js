@@ -34,7 +34,7 @@ export async function queueView(root, ctx) {
   root.append(h('div', { class: 'screen' },
     h('div', { class: 'panel' }, h('h2', {}, 'Mis oraciones'),
       h('div', { class: 'row' }, h('span', {}, `${done} de ${items.length} terminadas · te faltan ${items.length - done}`),
-        h('div', { class: 'bar', style: { flex: 1, maxWidth: '300px' } }, h('i', { style: { width: (100 * done / items.length) + '%' } })))),
+        h('div', { class: 'bar', style: { flex: 1, maxWidth: '240px' } }, h('i', { style: { width: (100 * done / items.length) + '%' } })))),
     bar, body));
   paint();
   return () => {};

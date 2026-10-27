@@ -54,3 +54,7 @@ DEFAULT_SENTENCES_PER_STUDENT = int(os.environ.get("SENTENCES_PER_STUDENT", "15"
 SPACY_MODEL = os.environ.get("SPACY_MODEL", "es_core_news_sm")
 # "auto" usa spaCy si está disponible; "simple" fuerza el analizador de respaldo (tests).
 NLP_BACKEND = os.environ.get("ANNOTATOR_NLP", "auto")
+
+# Vectores de palabras para «Relacionados» (los genera tools/build_related.py). Si la carpeta no
+# existe, la aplicación funciona igual pero sin pictogramas relacionados.
+RELATED_DIR = _path("ANNOTATOR_RELATED_DIR", ROOT / "data" / "models" / "related")

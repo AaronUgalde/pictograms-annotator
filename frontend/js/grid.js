@@ -3,8 +3,8 @@
 import { h, drag } from './util.js';
 import { imgUrl } from './api.js';
 
-const GAP = 4;
-export const ZOOMS = [48, 64, 80, 96]; // tamaño del pictograma en px
+const GAP = 3;
+export const ZOOMS = [38, 51, 64, 77]; // tamaño del pictograma en px
 
 export class VirtualGrid {
   constructor(viewport, { onPick, onHover }) {
@@ -17,8 +17,8 @@ export class VirtualGrid {
     this.focused = false;
     this.cells = new Map();
     this.cols = 1;
-    this.rowH = 104;
-    this.pitchX = 88;
+    this.rowH = 83;
+    this.pitchX = 70;
     this.imgTimer = 0;
 
     this.spacer = h('div', { class: 'grid-spacer' });
@@ -65,29 +65,32 @@ export class VirtualGrid {
     cancelAnimationFrame(this._raf);
   }
 
-  /** items: pictogramas del catálogo. notes: Map id → texto extra para el tooltip. */
-  setItems(items, { notes = null, emptyText = '' } = {}) {
+  /** items: pictogramas del catálogo. notes: Map id → texto extra para el tooltip.
+      related: Set de ids que no son coincidencia exacta (llevan la etiqueta «relacionado»).
+      keep: conservar el cursor y el scroll (la lista nueva empieza igual que la anterior). */
+  setItems(items, { notes = null, related = null, emptyText = '', keep = false } = {}) {
     this.items = items;
     this.notes = notes;
-    this.cursor = items.length ? 0 : -1;
+    this.related = related;
+    this.cursor = keep && this.cursor >= 0 ? Math.min(this.cursor, items.length - 1) : items.length ? 0 : -1;
     this.empty.textContent = emptyText;
     this.empty.classList.toggle('hidden', items.length > 0);
-    this.vp.scrollTop = 0;
+    if (!keep) this.vp.scrollTop = 0;
     this.render(true);
   }
 
   setZoom(pic) {
     this.vp.style.setProperty('--pic', pic + 'px');
-    this.vp.style.setProperty('--cell-w', pic + 20 + 'px');
-    this.vp.style.setProperty('--cell-h', pic + 36 + 'px');
+    this.vp.style.setProperty('--cell-w', pic + 16 + 'px');
+    this.vp.style.setProperty('--cell-h', pic + 29 + 'px');
     this.render(true);
     if (this.cursor >= 0) this.ensureVisible(this.cursor);
   }
 
   measure() {
     const cs = getComputedStyle(this.vp);
-    const cw = parseFloat(cs.getPropertyValue('--cell-w')) || 84;
-    const ch = parseFloat(cs.getPropertyValue('--cell-h')) || 100;
+    const cw = parseFloat(cs.getPropertyValue('--cell-w')) || 67;
+    const ch = parseFloat(cs.getPropertyValue('--cell-h')) || 80;
     this.pitchX = cw + GAP;
     this.rowH = ch + GAP;
     this.cols = Math.max(1, Math.floor((this.vp.clientWidth - GAP) / this.pitchX));
@@ -125,6 +128,7 @@ export class VirtualGrid {
   _cell(i) {
     const p = this.items[i];
     const note = this.notes?.get(p.id);
+    const rel = !!this.related?.has(p.id);
     const img = h('img', { alt: '', decoding: 'async' });
     img.draggable = false; // se arrastra la casilla, no la imagen
     img.dataset.src = imgUrl(p.id);
@@ -132,15 +136,17 @@ export class VirtualGrid {
     const dataset = { pid: p.id, idx: i };
     if (note) dataset.note = note;
     return h('div', {
-      class: 'slot cell',
+      class: 'slot cell' + (rel ? ' related' : ''),
       role: 'option',
       id: 'gc' + p.id,
-      'aria-label': p.main,
+      'aria-label': rel ? `${p.main} (relacionado)` : p.main,
       'aria-selected': 'false',
       draggable: true,
       dataset,
       style: { left: GAP + (i % this.cols) * this.pitchX + 'px', top: GAP + Math.floor(i / this.cols) * this.rowH + 'px' },
-    }, h('div', { class: 'pic' }, img), h('div', { class: 'lbl' }, p.main), p.flags ? h('span', { class: 'flag' }, '!') : null);
+    }, h('div', { class: 'pic' }, img), h('div', { class: 'lbl' }, p.main),
+    rel ? h('span', { class: 'rel', 'aria-hidden': 'true' }, 'relacionado') : null,
+    p.flags ? h('span', { class: 'flag' }, '!') : null);
   }
 
   _scheduleImages() {

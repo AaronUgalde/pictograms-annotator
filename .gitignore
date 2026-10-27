@@ -4,3 +4,4 @@ __pycache__/
 data/images/
 .DS_Store
 .env
+data/models/

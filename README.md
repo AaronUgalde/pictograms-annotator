@@ -52,6 +52,8 @@ Así, con pocos alumnos se cubren todas las oraciones al menos una vez, y con m�
 
 La propuesta inicial sale de un diccionario (el catálogo de ARASAAC) y de un analizador del español (spaCy, para pasar «comimos» a «comer»), más lo que ese mismo alumno eligió antes para esa palabra. No se usa ningún modelo generativo. Cada respuesta guarda si el alumno aceptó la propuesta sin cambios y cuánto tardó, por si se quiere analizar después.
 
+**Relacionados.** En la pestaña *Sugeridos* y en el buscador, detrás de las coincidencias aparecen pictogramas **parecidos en significado** (por ejemplo «coche» → «carro», «doctor» → «médico», «hambre» → «comida»), con la etiqueta **relacionado** para que se vea que no son una coincidencia exacta. Salen de vectores de palabras ([model2vec](https://github.com/MinishLab/model2vec), modelo `potion-multilingual-128M`, licencia MIT): un texto se compara con cada palabra clave del catálogo y se muestran los parecidos por encima de un umbral. Nunca entran en la propuesta inicial ni se colocan con `Intro` desde el buscador: hay que elegirlos a propósito. Las palabras que el modelo no conoce completas no dan relacionados (trocearlas da parecidos de ortografía, no de significado). El enfoque completo está en [docs/sugerencias.md](docs/sugerencias.md).
+
 ## Publicar la aplicación (deploy): Render + Neon, gratis
 
 La aplicación es **un solo contenedor Docker** (API + interfaz) y guarda los datos (alumnos, oraciones y respuestas) en **PostgreSQL**. Se publica gratis así:
@@ -59,7 +61,7 @@ La aplicación es **un solo contenedor Docker** (API + interfaz) y guarda los da
 - **Neon** guarda la base de datos.
 - **Render** ejecuta la aplicación. Su plan gratuito no tiene disco, y no hace falta: el catálogo de pictogramas viaja dentro de la imagen y se carga en memoria al arrancar.
 
-Usa unos 200 MB de RAM, holgado para los 512 MB del plan gratuito de Render.
+Usa unos 250 MB de RAM (los vectores de «Relacionados» se leen del disco según hacen falta), holgado para los 512 MB del plan gratuito de Render.
 
 Variables (ver `.env.example`):
 
@@ -119,6 +121,7 @@ cd backend
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 pip install "es_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl"
+python ../tools/build_related.py    # una vez: vectores de «Relacionados» en data/models/ (descarga ≈500 MB, guarda ≈90 MB)
 
 export DATABASE_URL=postgresql://localhost/annotator ADMIN_PASSWORD=prueba
 python manage.py serve                               # http://localhost:8000
@@ -143,12 +146,14 @@ backend/app/
   assign.py    carga de oraciones y reparto automático
   stats.py     datos del panel (progreso por alumno)
   suggest.py   propuestas de pictogramas (catálogo + spaCy + memoria del alumno)
+  related.py   pictogramas relacionados por significado (vectores model2vec)
   catalog.py   catálogo ARASAAC, cargado en memoria desde data/catalog/
   export.py    CSV y JSONL
   db.py        base de datos PostgreSQL
 frontend/      interfaz (HTML, CSS y JavaScript sin dependencias ni compilación)
 data/catalog/  copia versionada del catálogo ARASAAC
 data/sentences/ ejemplos de archivos de oraciones
+data/models/   vectores de «Relacionados» (los genera tools/build_related.py; no van en Git)
 docs/criterios-anotacion.md  guía de criterios que ven los alumnos
 Dockerfile, render.yaml  despliegue
 ```
@@ -157,4 +162,4 @@ Dockerfile, render.yaml  despliegue
 
 ## Licencia y atribución
 
-Los pictogramas son de ARASAAC (Gobierno de Aragón), autor Sergio Palao, bajo **CC BY-NC-SA**: hay que citar la fuente, no usarlos comercialmente y compartir con la misma licencia. Un conjunto de datos publicado con ellos hereda esa licencia. La fuente pixelada es Press Start 2P (licencia OFL).
+Los pictogramas son de ARASAAC (Gobierno de Aragón), autor Sergio Palao, bajo **CC BY-NC-SA**: hay que citar la fuente, no usarlos comercialmente y compartir con la misma licencia. Un conjunto de datos publicado con ellos hereda esa licencia. La fuente pixelada es Press Start 2P (licencia OFL). Los vectores de «Relacionados» vienen de `minishlab/potion-multilingual-128M` (licencia MIT).
